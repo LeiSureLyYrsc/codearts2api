@@ -1,0 +1,16 @@
+services:
+  codearts2api:
+    image: ghcr.io/leisurelyyrsc/codearts2api:latest
+    pull_policy: always
+    container_name: codearts2api
+    ports:
+      - "127.0.0.1:8787:8787"
+    env_file:
+      - .env
+    environment:
+      CA2A_HOST: "0.0.0.0"
+      CA2A_PORT: "8787"
+      CA2A_AUTH_DIR: /app/auths
+    volumes:
+      - ./auths:/app/auths
+    restart: unless-stopped
