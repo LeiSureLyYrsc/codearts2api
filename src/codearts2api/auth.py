@@ -51,5 +51,8 @@ def require_upstream_credentials(settings: Settings) -> None:
     if not settings.has_credentials():
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Upstream credentials are not configured (set CODEARTS_AK and CODEARTS_SK)",
+            detail=(
+                "No enabled accounts in the pool. Add an account in the WebUI, "
+                "run `uv run codearts2api login`, or set CODEARTS_AK and CODEARTS_SK."
+            ),
         )
