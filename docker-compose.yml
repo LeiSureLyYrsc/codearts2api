@@ -11,6 +11,8 @@ services:
       CA2A_HOST: "0.0.0.0"
       CA2A_PORT: "8787"
       CA2A_AUTH_DIR: /app/auths
+      CA2A_DATA_DIR: /app/data
     volumes:
       - ./auths:/app/auths
+      - ./data:/app/data
     restart: unless-stopped

@@ -20,7 +20,7 @@ FROM python:3.12-slim-bookworm
 WORKDIR /app
 
 RUN useradd --create-home --uid 1000 --shell /usr/sbin/nologin app \
-    && mkdir -p /app/auths \
+    && mkdir -p /app/auths /app/data \
     && chown -R app:app /app
 
 COPY --from=builder --chown=app:app /app/.venv /app/.venv
@@ -32,7 +32,8 @@ ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONDONTWRITEBYTECODE=1 \
     CA2A_HOST=0.0.0.0 \
     CA2A_PORT=8787 \
-    CA2A_AUTH_DIR=/app/auths
+    CA2A_AUTH_DIR=/app/auths \
+    CA2A_DATA_DIR=/app/data
 
 EXPOSE 8787
 

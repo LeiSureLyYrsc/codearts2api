@@ -1,6 +1,6 @@
 [project]
 name = "codearts2api"
-version = "0.1.0"
+version = "0.2.0"
 description = "Huawei Cloud China 码道 CodeArts Agent to OpenAI-compatible API gateway"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -37,3 +37,7 @@ testpaths = ["tests"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 pythonpath = ["src"]
+
+
+[tool.hatch.build.targets.wheel.force-include]
+"src/codearts2api/static" = "codearts2api/static"
