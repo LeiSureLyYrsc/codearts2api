@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="zh-Hans">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>codearts2api 控制台</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <div id="app">
+    <header class="topbar">
+      <div class="brand">
+        <span class="logo">码</span>
+        <div>
+          <h1>codearts2api</h1>
+          <p>账号池与运行配置</p>
+        </div>
+      </div>
+      <div id="header-actions" class="header-actions hidden">
+        <span id="header-status" class="pill">未连接</span>
+        <button type="button" id="btn-logout" class="btn ghost">退出登录</button>
+      </div>
+    </header>
+
+    <main>
+      <section id="login-view" class="login-wrap">
+        <div class="card login-card">
+          <h2>登录控制台</h2>
+          <p class="muted">输入网关 Bearer 密钥（环境变量 <code>CA2A_API_KEY</code>，或在此保存后的密钥）。密钥只保存在本机浏览器的 sessionStorage，不会放入 URL。</p>
+          <form id="login-form">
+            <label for="api-key">网关 API Key</label>
+            <input id="api-key" name="api_key" type="password" autocomplete="current-password" required placeholder="CA2A_API_KEY">
+            <p id="login-error" class="error hidden"></p>
+            <button type="submit" class="btn primary">进入控制台</button>
+          </form>
+        </div>
+      </section>
+
+      <section id="console-view" class="hidden">
+        <nav class="tabs" role="tablist">
+          <button type="button" class="tab active" data-tab="accounts">账号池</button>
+          <button type="button" class="tab" data-tab="checkin">签到与状态</button>
+          <button type="button" class="tab" data-tab="settings">运行配置</button>
+        </nav>
+
+        <section id="tab-accounts" class="tab-panel">
+          <div class="section-head">
+            <div>
+              <h2>账号池</h2>
+              <p class="muted">对话按策略轮换 / 故障转移；每日签到会对每个已启用账号分别执行。</p>
+            </div>
+            <div class="actions">
+              <button type="button" class="btn" id="btn-add-aksk">添加 AK/SK 账号</button>
+              <button type="button" class="btn primary" id="btn-add-oauth">添加 OAuth 账号</button>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>名称</th>
+                  <th>类型</th>
+                  <th>凭证</th>
+                  <th>启用</th>
+                  <th>上次签到</th>
+                  <th>状态</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody id="account-rows">
+                <tr><td colspan="7" class="muted">加载中…</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section id="tab-checkin" class="tab-panel hidden">
+          <div class="grid two">
+            <div class="card">
+              <h2>调度器</h2>
+              <dl id="scheduler-info" class="kv"></dl>
+              <div class="actions">
+                <button type="button" class="btn primary" id="btn-checkin-all">全部签到</button>
+                <button type="button" class="btn" id="btn-benefit-all">全部领取权益</button>
+              </div>
+              <p class="muted">权益领取与每日签到是两条独立路径；失败不会当作绕过限流。</p>
+            </div>
+            <div class="card">
+              <h2>最近一次整体结果</h2>
+              <pre id="last-checkin" class="code-block">暂无</pre>
+            </div>
+          </div>
+          <div class="card">
+            <h2>各账号结果</h2>
+            <div id="checkin-accounts" class="muted">尚未签到。</div>
+          </div>
+        </section>
+
+        <section id="tab-settings" class="tab-panel hidden">
+          <form id="settings-form" class="card">
+            <div class="section-head">
+              <div>
+                <h2>运行配置</h2>
+                <p class="muted">保存后写入 <code>data/config.json</code> 并尽量立即生效。监听地址仍只能通过环境变量设置。</p>
+              </div>
+              <button type="submit" class="btn primary">保存配置</button>
+            </div>
+            <div id="readonly-settings" class="readonly-grid"></div>
+            <div class="form-grid">
+              <label>时区 <input name="timezone" required></label>
+              <label>签到 Cron <input name="checkin_cron" required></label>
+              <label>活动类型 <input name="campaign_type"></label>
+              <label>模型缓存 TTL（秒） <input name="model_cache_ttl" type="number" min="0"></label>
+              <label>账号池策略
+                <select name="pool_strategy">
+                  <option value="round_robin">round_robin（轮询）</option>
+                  <option value="first_available">first_available（按列表优先）</option>
+                  <option value="random">random（随机）</option>
+                </select>
+              </label>
+              <label>故障转移冷却（秒） <input name="cooldown_seconds" type="number" min="0"></label>
+              <label>日志级别
+                <select name="log_level">
+                  <option>DEBUG</option>
+                  <option>INFO</option>
+                  <option>WARNING</option>
+                  <option>ERROR</option>
+                </select>
+              </label>
+              <label>凭证来源
+                <select name="credential_source">
+                  <option value="auto">auto（全部类型）</option>
+                  <option value="oauth">oauth（仅 OAuth 账号）</option>
+                  <option value="env">env（仅 AK/SK 账号）</option>
+                </select>
+              </label>
+              <label>HTTP 超时（秒） <input name="http_timeout" type="number" step="0.1" min="1"></label>
+              <label>流式读取超时（秒） <input name="http_stream_timeout" type="number" step="0.1" min="1"></label>
+              <label>OAuth 回调端口（0=系统分配） <input name="oauth_callback_port" type="number" min="0" max="65535"></label>
+              <label>OAuth locale <input name="oauth_locale"></label>
+              <label class="span-2">snap-access 基址 <input name="snap_base_url"></label>
+              <label class="span-2">opengw 基址 <input name="opengw_base_url"></label>
+              <label class="span-2">OAuth 门户 <input name="oauth_portal_url"></label>
+              <label class="span-2">OAuth STS <input name="oauth_sts_url"></label>
+              <label>OAuth client_id <input name="oauth_client_id"></label>
+              <label>X-Language（可选） <input name="x_language"></label>
+              <label class="check"><input name="scheduler_enabled" type="checkbox"> 启用定时签到</label>
+              <label class="check"><input name="checkin_run_on_startup" type="checkbox"> 启动时签到（下次进程启动生效）</label>
+              <label class="check"><input name="checkin_claim_all" type="checkbox"> 同时领取其他可领取活动</label>
+              <label class="span-2">更新网关 API Key（留空表示不修改；保存后立即生效，并写入数据目录。环境变量仅作启动默认值。）
+                <input name="api_key" type="password" autocomplete="new-password" placeholder="留空则保持现有密钥">
+              </label>
+            </div>
+            <p id="settings-message" class="muted"></p>
+          </form>
+        </section>
+      </section>
+    </main>
+  </div>
+
+  <dialog id="account-dialog">
+    <form id="account-form" method="dialog">
+      <h3 id="account-dialog-title">添加账号</h3>
+      <input type="hidden" name="id">
+      <input type="hidden" name="kind" value="aksk">
+      <label>名称 <input name="name" required></label>
+      <label>备注 <input name="note"></label>
+      <div id="aksk-fields">
+        <label>Access Key <input name="ak" autocomplete="off"></label>
+        <label>Secret Key <input name="sk" type="password" autocomplete="new-password"></label>
+        <label>Security Token（可选） <input name="security_token" type="password" autocomplete="off"></label>
+        <label>Project ID（可选） <input name="project_id"></label>
+        <p class="muted" id="secret-hint" hidden>密钥栏留空表示保持原值。</p>
+      </div>
+      <label class="check"><input name="enabled" type="checkbox" checked> 启用</label>
+      <p id="account-error" class="error hidden"></p>
+      <div class="actions">
+        <button type="button" class="btn ghost" id="btn-account-cancel">取消</button>
+        <button type="submit" class="btn primary">保存</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="login-dialog">
+    <div class="dialog-body">
+      <h3>OAuth 登录</h3>
+      <p class="muted">在能访问本机 127.0.0.1 的浏览器中打开授权地址，登录华为云并确认授权。</p>
+      <p><strong>账号：</strong> <span id="oauth-account-label"></span></p>
+      <p><strong>状态：</strong> <span id="oauth-status">准备中</span></p>
+      <p class="break-all" id="oauth-url-wrap" hidden>
+        <strong>授权地址：</strong><br>
+        <a id="oauth-url" href="#" target="_blank" rel="noopener"></a>
+      </p>
+      <p class="muted" id="oauth-callback"></p>
+      <div class="actions">
+        <button type="button" class="btn" id="btn-copy-url">复制授权地址</button>
+        <button type="button" class="btn ghost" id="btn-login-close">关闭</button>
+      </div>
+    </div>
+  </dialog>
+
+  <div id="toast" class="toast hidden"></div>
+  <script src="/static/app.js"></script>
+</body>
+</html>

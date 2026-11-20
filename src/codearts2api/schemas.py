@@ -27,6 +27,28 @@ class ChatCompletionsRequest(BaseModel):
 
 class CheckinRequest(BaseModel):
     all_claimable: bool = False
+    account_id: str | None = None
+
+
+class AccountCreateRequest(BaseModel):
+    name: str
+    kind: Literal["aksk", "oauth"]
+    enabled: bool = True
+    note: str = ""
+    ak: str | None = None
+    sk: str | None = None
+    security_token: str | None = None
+    project_id: str | None = None
+
+
+class AccountUpdateRequest(BaseModel):
+    name: str | None = None
+    enabled: bool | None = None
+    note: str | None = None
+    ak: str | None = None
+    sk: str | None = None
+    security_token: str | None = None
+    project_id: str | None = None
 
 
 class OpenAIErrorBody(BaseModel):

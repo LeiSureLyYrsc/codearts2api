@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 
 import uvicorn
@@ -12,12 +13,21 @@ from codearts2api.credentials import CredentialResolver
 from codearts2api.logging_setup import configure_logging
 from codearts2api.oauth.flow import LoginError
 from codearts2api.oauth.session import SessionStore
+from codearts2api.pool import AccountPool, collect_redaction_secrets
 
 
 def _settings() -> Settings:
     settings = Settings()
-    configure_logging(settings.log_level, settings.secret_values_for_redaction())
+    pool = AccountPool(settings)
+    pool.load_or_migrate()
+    configure_logging(settings.log_level, collect_redaction_secrets(settings, pool))
     return settings
+
+
+def _pool(settings: Settings) -> AccountPool:
+    pool = AccountPool(settings)
+    pool.load_or_migrate()
+    return pool
 
 
 def cmd_serve(args: argparse.Namespace) -> int:
@@ -35,16 +45,15 @@ def cmd_serve(args: argparse.Namespace) -> int:
 def cmd_login(args: argparse.Namespace) -> int:
     settings = _settings()
     resolver = CredentialResolver(settings)
+    pool = resolver.pool
     print_only = bool(args.print_only)
+    account_name = getattr(args, "account", None)
     try:
-        # Build the flow in two stages so --print-only can print the URL first.
-        # run_login already prints via logging; we also print the URL to stdout.
         from codearts2api.oauth.dpop import generate_p256_keypair
-        from codearts2api.oauth.flow import CallbackServer, CALLBACK_TIMEOUT_SECONDS, build_authorize_url
+        from codearts2api.oauth.flow import CALLBACK_TIMEOUT_SECONDS, CallbackServer, build_authorize_url
         from codearts2api.oauth.pkce import generate_pkce_pair, generate_ticket_id
 
         endpoints = resolver.endpoints()
-        store = resolver.store
         pkce = generate_pkce_pair()
         ticket_id = generate_ticket_id()
         dpop = generate_p256_keypair()
@@ -75,22 +84,41 @@ def cmd_login(args: argparse.Namespace) -> int:
                 print("Could not open a local browser; open the URL above yourself.")
         try:
             session = server.wait(timeout=CALLBACK_TIMEOUT_SECONDS)
-            store.save(session)
+            if account_name:
+                account = pool.find_or_create_oauth(account_name)
+            else:
+                account = pool.find_or_create_oauth(use_legacy_session=True)
+            path = pool.attach_session(account, session)
             view = session.public_view()
             print("Login succeeded.")
+            print(f"  account: {account.name} ({account.id})")
             print(f"  expires_at: {view.get('expires_at')}")
             print(f"  has_refresh_token: {view.get('has_refresh_token')}")
-            print(f"  saved to: {store.path}")
+            print(f"  saved to: {path}")
             return 0
         finally:
             server.stop()
     except LoginError as exc:
         print(f"Login failed: {exc}", file=sys.stderr)
         return 1
+    except ValueError as exc:
+        print(f"Login failed: {exc}", file=sys.stderr)
+        return 1
 
 
-def cmd_logout(_args: argparse.Namespace) -> int:
+def cmd_logout(args: argparse.Namespace) -> int:
     settings = _settings()
+    pool = _pool(settings)
+    account_name = getattr(args, "account", None)
+    if account_name:
+        account = pool.find_by_name(account_name) or pool.get(account_name)
+        if account is None or account.kind != "oauth":
+            print(f"OAuth account not found: {account_name}", file=sys.stderr)
+            return 1
+        store = pool.session_store_for(account)
+        store.clear()
+        print(f"Removed OAuth session for account {account.name} ({account.id}) at {store.path}")
+        return 0
     store = SessionStore(settings.auth_dir)
     store.clear()
     print(f"Removed OAuth session under {store.directory}")
@@ -104,6 +132,29 @@ def cmd_status(_args: argparse.Namespace) -> int:
     print(f"credential_source: {status['credential_source']}")
     print(f"env_configured: {status['env_configured']}")
     print(f"oauth_session: {status['oauth_session']}")
+    pool = status.get("pool") or {}
+    print(f"pool_count: {pool.get('count')}")
+    print(f"pool_enabled: {pool.get('enabled')}")
+    print(f"pool_strategy: {pool.get('strategy')}")
+    accounts = pool.get("accounts") or []
+    if not accounts:
+        print("accounts: (none)")
+        return 0
+    print("accounts:")
+    for account in accounts:
+        # public_accounts already masks secrets; still never print raw keys.
+        line = {
+            "id": account.get("id"),
+            "name": account.get("name"),
+            "kind": account.get("kind"),
+            "enabled": account.get("enabled"),
+            "ak_masked": account.get("ak_masked"),
+            "oauth_expires_at": (account.get("oauth") or {}).get("expires_at"),
+            "in_cooldown": account.get("in_cooldown"),
+            "last_checkin_at": account.get("last_checkin_at"),
+            "last_checkin_status": (account.get("last_checkin") or {}).get("status"),
+        }
+        print(f"  {json.dumps(line, ensure_ascii=False)}")
     return 0
 
 
@@ -124,12 +175,22 @@ def main() -> None:
         action="store_true",
         help="Print the authorize URL and wait for the local callback; do not open a browser",
     )
+    login.add_argument(
+        "--account",
+        default=None,
+        help="Attach the resulting session to this pool account name (created if missing)",
+    )
     login.set_defaults(func=cmd_login)
 
     logout = sub.add_parser("logout", help="Delete the locally stored OAuth session")
+    logout.add_argument(
+        "--account",
+        default=None,
+        help="Clear the OAuth session file for this pool account name or id",
+    )
     logout.set_defaults(func=cmd_logout)
 
-    status = sub.add_parser("status", help="Show whether env AK/SK and/or an OAuth session are available")
+    status = sub.add_parser("status", help="Show the account pool and whether env / OAuth credentials are available")
     status.set_defaults(func=cmd_status)
 
     # Backward compatible: flags without a subcommand still start the server.

@@ -2,10 +2,16 @@
 
 华为云中国站（huaweicloud.com）**码道 CodeArts Agent** 到 **OpenAI 兼容 API** 的本地网关。
 
-技术栈：Python 3.12、uv、FastAPI。上游认证使用华为云官方 **SDK-HMAC-SHA256** 签名算法，凭证来源可以是：
+技术栈：Python 3.12、uv、FastAPI。上游认证使用华为云官方 **SDK-HMAC-SHA256** 签名算法。凭证放在**多账号池**中，每个账号可以是：
 
 1. **官方客户端同款浏览器 SSO / OAuth**（推荐，不必粘贴长期 AK/SK）
 2. 你自己的华为云 IAM **永久 AK/SK**（以及可选的 STS `X-Security-Token`）
+
+`.env` 里的 `CODEARTS_AK` / `CODEARTS_SK` 只是可选的**首次启动引导**：若账号池还是空的，会从环境变量导入一个启用中的账号。导入之后，账号池文件（默认 `data/config.json`）才是凭证的权威来源；在 WebUI 里新增的账号不会在重启时被清掉。
+
+大多数运行配置（时区、签到 cron、调度开关、账号池策略、上游超时等）都可以在 WebUI 里修改并写入数据目录，不必只靠环境变量。`CA2A_HOST` / `CA2A_PORT` 仍只能通过环境变量设置；`CA2A_API_KEY` 至少要在 `.env` 里提供一份启动默认值（也可随后在 WebUI 里更换并立即生效）。
+
+对话请求按配置的策略在启用账号之间轮换，并在上游返回 401/403/429/5xx 时把该账号放入冷却并改用其他账号（只做故障转移，不是插队或绕过限流）。每日签到和权益领取会**分别对每个已启用账号**执行。
 
 项目内支持官方「每日签到得积分」活动、进程内定时签到，以及动态拉取模型列表。本仓库全部为原创实现，没有 fork 或拷贝其他网关项目。
 
@@ -91,7 +97,7 @@ https://snap-access.cn-north-4.myhuaweicloud.com
 
 门户回调地址被官方客户端写成环回地址，因此授权必须在能访问本机 `127.0.0.1:<port>` 的浏览器中完成。在远程服务器上登录时，请在自己电脑上做 SSH 本地端口转发，或直接在有浏览器的那台机器上执行 `uv run codearts2api login`。`--print-only` 只是不自动打开浏览器、把授权 URL 打印出来，仍然在本机等待回调。
 
-凭证优先级（`CA2A_CREDENTIAL_SOURCE`，默认 `auto`）：已登录且有效（或可刷新）的 OAuth 会话优先；否则使用环境变量里的 IAM AK/SK。设为 `env` 则只用环境变量，设为 `oauth` 则必须先登录。
+`CA2A_CREDENTIAL_SOURCE`（默认 `auto`）现在用来筛选账号池类型：`auto` 使用全部启用账号，`oauth` 只用 OAuth 账号，`env` 只用 AK/SK 账号。对话使用的具体账号由账号池策略决定（默认 `round_robin`，也可选 `first_available` 或 `random`）。
 
 ### 4. 动态模型列表
 
@@ -118,16 +124,18 @@ cp .env.example .env
 # 编辑 .env，至少设置本地网关密钥 CA2A_API_KEY
 ```
 
-两种准备上游凭证的方式（二选一即可）：
+准备上游凭证（任选，也可之后在 WebUI 里继续添加）：
 
 ```bash
-# 方式 A：官方 CLI 同款浏览器登录（推荐）
+# 方式 A：官方 CLI 同款浏览器登录（推荐），写入账号池
 uv run codearts2api login
+# 绑定到指定名称的账号（不存在则创建）
+uv run codearts2api login --account 上班
 # 无桌面环境、只想打印链接：
 uv run codearts2api login --print-only
 
-# 方式 B：填写自己的 IAM AK/SK
-# 在 .env 中设置 CODEARTS_AK、CODEARTS_SK，可选 CODEARTS_SECURITY_TOKEN
+# 方式 B：在 .env 中填写自己的 IAM AK/SK（可选 CODEARTS_SECURITY_TOKEN）
+# 首次启动时会导入为名为 env 的账号；之后请以 WebUI / data/config.json 为准
 ```
 
 启动网关：
@@ -138,7 +146,13 @@ uv run codearts2api
 uv run codearts2api serve --host 127.0.0.1 --port 8787
 ```
 
-默认监听 `127.0.0.1:8787`。其他命令：`uv run codearts2api status`、`uv run codearts2api logout`。
+默认监听 `127.0.0.1:8787`。浏览器打开控制台：
+
+- http://127.0.0.1:8787/ 或 http://127.0.0.1:8787/ui
+
+页面本身不用带密钥；进入后在登录表单填写 `CA2A_API_KEY`，浏览器只把它存在 sessionStorage，并以 `Authorization: Bearer` 调用管理接口。在「账号池」里可以再添加第二个 AK/SK 或 OAuth 账号。OAuth 回调仍然是官方客户端同款的 `http://127.0.0.1:<port>/oauth/callback`，浏览器必须能访问这台机器的环回地址。
+
+其他命令：`uv run codearts2api status`（列出账号池，不输出密钥）、`uv run codearts2api logout`（可加 `--account`）。
 
 ```bash
 uv run pytest
@@ -150,7 +164,7 @@ uv run pytest
 
 [`ghcr.io/leisurelyyrsc/codearts2api:latest`](https://github.com/LeiSureLyYrsc/codearts2api/pkgs/container/codearts2api)
 
-`docker-compose.yml` 已指向该 `latest` 标签。先复制 `.env.example` 为 `.env`，至少设置 `CA2A_API_KEY`，以及 IAM AK/SK（容器内不方便走官方浏览器回调登录）。容器监听 `0.0.0.0:8787`，默认只映射到宿主机的 `127.0.0.1:8787`。
+`docker-compose.yml` 已指向该 `latest` 标签。先复制 `.env.example` 为 `.env`，**必须**设置 `CA2A_API_KEY`。IAM AK/SK 现在是可选的引导配置；也可以先启动，再在 WebUI 里添加账号。容器监听 `0.0.0.0:8787`，默认只映射到宿主机的 `127.0.0.1:8787`。控制台在 http://127.0.0.1:8787/ 。
 
 ```bash
 cp .env.example .env
@@ -159,25 +173,28 @@ docker compose pull
 docker compose up -d
 ```
 
-首次拉取需要仓库里的 Actions 至少成功跑完一次。镜像随公开仓库发布；若 `docker compose pull` 返回 401，到 GitHub Packages 设置里确认 `codearts2api` 包已设为 public。OAuth 会话目录挂载在 `./auths`。
+首次拉取需要仓库里的 Actions 至少成功跑完一次。镜像随公开仓库发布；若 `docker compose pull` 返回 401，到 GitHub Packages 设置里确认 `codearts2api` 包已设为 public。`./data`（WebUI 配置与账号池）和 `./auths`（OAuth 会话）都会挂载到容器中以保持持久化。容器内的 OAuth 回调仍然指向容器自己的 127.0.0.1，通常需要在宿主机做端口转发，或在有浏览器的机器上用 CLI 登录后把 `auths/` 拷进去。
 
 ## 配置说明
 
 | 变量 | 说明 | 默认 |
 | --- | --- | --- |
-| `CODEARTS_AK` / `CODEARTS_SK` | IAM 访问密钥（OAuth 登录时可不填） | 空 |
+| `CODEARTS_AK` / `CODEARTS_SK` | 可选的首次引导 IAM 密钥；账号池为空时导入为 `env` 账号 | 空 |
 | `CODEARTS_SECURITY_TOKEN` | 可选 STS 令牌，作为已签名的 `X-Security-Token` | 空 |
 | `CODEARTS_PROJECT_ID` | 可选，已签名的 `X-Project-Id` | 空 |
-| `CA2A_CREDENTIAL_SOURCE` | `auto` / `oauth` / `env` | `auto` |
+| `CA2A_CREDENTIAL_SOURCE` | `auto` / `oauth` / `env`（筛选账号池类型） | `auto` |
 | `CA2A_AUTH_DIR` | OAuth 会话目录 | `auths` |
+| `CA2A_DATA_DIR` | 账号池与运行配置目录（`config.json`，权限 0600） | `data` |
+| `CA2A_POOL_STRATEGY` | `round_robin` / `first_available` / `random` | `round_robin` |
+| `CA2A_COOLDOWN_SECONDS` | 上游 401/403/429/5xx 后的账号冷却秒数 | `60` |
 | `CA2A_OAUTH_CLIENT_ID` | 官方 CLI 为 `CodeArts_Tui` | `CodeArts_Tui` |
 | `CA2A_OAUTH_PORTAL_URL` | 官方门户 | `https://codearts.huaweicloud.com/portal` |
 | `CA2A_OAUTH_STS_URL` | 官方 CLI 使用的 STS | `https://sts.cn-north-4.myhuaweicloud.com` |
 | `CA2A_OAUTH_CALLBACK_PORT` | 本机回调端口，0 表示系统分配 | `0` |
 | `SNAP_BASE_URL` | snap-access 网关 | `https://snap-access.cn-north-4.myhuaweicloud.com` |
 | `OPENGW_BASE_URL` | 官方 CLI 中的权益网关 | `https://opengw.developer.huaweicloud.com` |
-| `CA2A_HOST` / `CA2A_PORT` | 本地监听 | `127.0.0.1` / `8787` |
-| `CA2A_API_KEY` 或 `CODEARTS2API_API_KEY` | 保护 `/v1/*` 与 `/admin/*` | 空（未配置则受保护接口返回 503） |
+| `CA2A_HOST` / `CA2A_PORT` | 本地监听（仅环境变量，不能在 WebUI 修改） | `127.0.0.1` / `8787` |
+| `CA2A_API_KEY` 或 `CODEARTS2API_API_KEY` | 保护 `/v1/*` 与 `/admin/*` 的启动默认值；也可在 WebUI 更换并持久化 | 空（未配置则受保护接口返回 503） |
 | `CA2A_CHECKIN_CRON` | 5 段 cron | `0 8 * * *` |
 | `CA2A_TIMEZONE` | 调度时区 | `Asia/Shanghai` |
 | `CA2A_CHECKIN_RUN_ON_STARTUP` | 启动时立即签到 | `true` |
@@ -186,7 +203,14 @@ docker compose up -d
 | `CA2A_MODEL_CACHE_TTL` | 模型列表缓存秒数 | `60` |
 | `CA2A_LOG_LEVEL` | 日志级别 | `INFO` |
 
-日志为结构化 JSON，不会输出 AK/SK/令牌，并对日志中的密钥值脱敏。
+日志为结构化 JSON，不会输出 AK/SK/令牌，并对日志中的密钥值脱敏。上表中除 `CA2A_HOST` / `CA2A_PORT` 以及作为启动默认值的 `CA2A_API_KEY` 外，其余项都可以在 WebUI「运行配置」里覆盖；修改时区、cron 或调度开关时，进程内 APScheduler 会重新安排，无需重启。`env` 账号若仍存在，会在启动时与当前环境变量中的 AK/SK 同步；WebUI 新建的账号不受此影响。
+
+## 多号池与 WebUI
+
+1. 打开 http://127.0.0.1:8787/ ，输入 `CA2A_API_KEY`。
+2. 在「账号池」中添加第二个账号：AK/SK 直接填写密钥；OAuth 账号保存后再点「OAuth 登录」，在能访问 `127.0.0.1` 的浏览器里打开授权地址。
+3. 「签到与状态」可对全部或单个账号触发每日签到 / 权益领取，并查看调度器的下次运行时间。上次签到结果会写入 `data/config.json`，重启后仍可在页面看到。
+4. 管理接口：`GET/PUT /admin/config`，`GET/POST /admin/accounts`，`PATCH/DELETE /admin/accounts/{id}`，`POST /admin/accounts/{id}/login`，`POST /admin/accounts/{id}/test`（用已有的官方套餐统计路径做探测）。响应中的 SK / security_token / refresh_token / 完整 AK 一律脱敏。
 
 ## 接口与调用示例
 
@@ -213,9 +237,11 @@ curl -sN http://127.0.0.1:8787/v1/chat/completions   -H "Authorization: Bearer $
 curl -s -X POST http://127.0.0.1:8787/admin/checkin   -H "Authorization: Bearer $CA2A_API_KEY"   -H "Content-Type: application/json"   -d '{"all_claimable": false}'
 
 curl -s http://127.0.0.1:8787/admin/status   -H "Authorization: Bearer $CA2A_API_KEY"
+
+curl -s http://127.0.0.1:8787/admin/accounts   -H "Authorization: Bearer $CA2A_API_KEY"
 ```
 
-`GET /admin/checkin` 与 `GET /admin/status` 内容相同。
+`GET /admin/checkin` 与 `GET /admin/status` 内容相同，并会附带各账号的签到结果。
 
 ## 限制与注意事项
 

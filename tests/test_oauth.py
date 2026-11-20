@@ -162,40 +162,46 @@ def test_credential_precedence_oauth_over_env(tmp_path) -> None:  # type: ignore
         codearts_ak="env-ak",
         codearts_sk="env-sk",
         api_key="k",
-        auth_dir=str(tmp_path),
+        auth_dir=str(tmp_path / "auths"),
+        data_dir=str(tmp_path / "data"),
         credential_source="auto",
         scheduler_enabled=False,
         checkin_run_on_startup=False,
+        pool_strategy="first_available",
     )
     resolver = CredentialResolver(settings)
-    # No session yet: env wins.
+    # First-run seed from env AK/SK.
     resolved = resolver.resolve()
-    assert resolved.source == "env"
     assert resolved.access_key_id == "env-ak"
+    assert resolved.account_id == "env"
 
     store = resolver.store
-    store.save(
-        OAuthSession(
-            access_key_id="oauth-ak",
-            secret_access_key="oauth-sk",
-            security_token="oauth-st",
-            expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
-            source="oauth",
-        )
+    session = OAuthSession(
+        access_key_id="oauth-ak",
+        secret_access_key="oauth-sk",
+        security_token="oauth-st",
+        expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+        source="oauth",
     )
-    resolved = resolver.resolve()
-    assert resolved.access_key_id == "oauth-ak"
-    assert resolved.security_token == "oauth-st"
-    assert resolved.source == "oauth"
+    store.save(session)
+    # Legacy session.json is imported into the pool on the next migrate pass.
+    resolver.pool.load_or_migrate()
+    oauth_accounts = [item for item in resolver.pool.accounts if item.kind == "oauth"]
+    assert len(oauth_accounts) == 1
+    oauth_resolved = resolver.resolve_account(oauth_accounts[0])
+    assert oauth_resolved.access_key_id == "oauth-ak"
+    assert oauth_resolved.security_token == "oauth-st"
 
     settings_env = Settings(
         codearts_ak="env-ak",
         codearts_sk="env-sk",
         api_key="k",
-        auth_dir=str(tmp_path),
+        auth_dir=str(tmp_path / "auths"),
+        data_dir=str(tmp_path / "data-env"),
         credential_source="env",
         scheduler_enabled=False,
         checkin_run_on_startup=False,
     )
     only_env = CredentialResolver(settings_env).resolve()
     assert only_env.access_key_id == "env-ak"
+    assert only_env.account_id == "env"
