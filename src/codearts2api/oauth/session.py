@@ -113,9 +113,13 @@ class OAuthSession:
 
 
 class SessionStore:
-    def __init__(self, directory: str | Path) -> None:
+    def __init__(self, directory: str | Path, filename: str = SESSION_FILENAME) -> None:
         self.directory = Path(directory)
-        self.path = self.directory / SESSION_FILENAME
+        self.filename = filename
+        self.path = self.directory / filename
+
+    def for_file(self, filename: str) -> "SessionStore":
+        return SessionStore(self.directory, filename)
 
     def load(self) -> OAuthSession | None:
         if not self.path.is_file():
