@@ -8,6 +8,35 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 DEFAULT_SNAP_BASE_URL = "https://snap-access.cn-north-4.myhuaweicloud.com"
 DEFAULT_TIMEZONE = "Asia/Shanghai"
 
+# Fields that may be overridden by data/config.json and the WebUI.
+# host / port stay env-only (process bind). api_key is overridable once persisted.
+OVERRIDABLE_FIELDS = (
+    "timezone",
+    "checkin_cron",
+    "checkin_run_on_startup",
+    "scheduler_enabled",
+    "campaign_type",
+    "checkin_claim_all",
+    "model_cache_ttl",
+    "snap_base_url",
+    "opengw_base_url",
+    "x_language",
+    "log_level",
+    "http_timeout",
+    "http_stream_timeout",
+    "credential_source",
+    "oauth_client_id",
+    "oauth_portal_url",
+    "oauth_sts_url",
+    "oauth_locale",
+    "oauth_callback_port",
+    "pool_strategy",
+    "cooldown_seconds",
+    "api_key",
+)
+
+READ_ONLY_FIELDS = ("host", "port", "data_dir", "auth_dir")
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -94,6 +123,10 @@ class Settings(BaseSettings):
         default="auths",
         validation_alias=AliasChoices("CA2A_AUTH_DIR", "CODEARTS2API_AUTH_DIR"),
     )
+    data_dir: str = Field(
+        default="data",
+        validation_alias=AliasChoices("CA2A_DATA_DIR", "CODEARTS2API_DATA_DIR"),
+    )
     credential_source: str = Field(
         default="auto",
         validation_alias=AliasChoices("CA2A_CREDENTIAL_SOURCE", "CODEARTS2API_CREDENTIAL_SOURCE"),
@@ -134,6 +167,14 @@ class Settings(BaseSettings):
             "CODEARTS2API_HTTP_STREAM_TIMEOUT",
         ),
     )
+    pool_strategy: str = Field(
+        default="round_robin",
+        validation_alias=AliasChoices("CA2A_POOL_STRATEGY", "CODEARTS2API_POOL_STRATEGY"),
+    )
+    cooldown_seconds: int = Field(
+        default=60,
+        validation_alias=AliasChoices("CA2A_COOLDOWN_SECONDS", "CODEARTS2API_COOLDOWN_SECONDS"),
+    )
 
     @field_validator("credential_source")
     @classmethod
@@ -141,6 +182,14 @@ class Settings(BaseSettings):
         normalized = value.strip().lower()
         if normalized not in {"auto", "oauth", "env"}:
             raise ValueError("CA2A_CREDENTIAL_SOURCE must be auto, oauth, or env")
+        return normalized
+
+    @field_validator("pool_strategy")
+    @classmethod
+    def _pool_strategy(cls, value: str) -> str:
+        normalized = value.strip().lower().replace("-", "_")
+        if normalized not in {"round_robin", "first_available", "random"}:
+            raise ValueError("CA2A_POOL_STRATEGY must be round_robin, first_available, or random")
         return normalized
 
     @field_validator("oauth_portal_url", "oauth_sts_url")
@@ -167,6 +216,13 @@ class Settings(BaseSettings):
             return None
         return value.strip()
 
+    @field_validator("cooldown_seconds")
+    @classmethod
+    def _cooldown_non_negative(cls, value: int) -> int:
+        if value < 0:
+            raise ValueError("CA2A_COOLDOWN_SECONDS must be >= 0")
+        return value
+
     def has_credentials(self) -> bool:
         return bool(
             self.codearts_ak
@@ -178,7 +234,7 @@ class Settings(BaseSettings):
     def has_api_key(self) -> bool:
         return bool(self.api_key and self.api_key.get_secret_value())
 
-    def secret_values_for_redaction(self) -> list[str]:
+    def secret_values_for_redaction(self, pool: object | None = None) -> list[str]:
         values: list[str] = []
         for item in (
             self.codearts_ak,
@@ -191,4 +247,37 @@ class Settings(BaseSettings):
             raw = item.get_secret_value()
             if raw:
                 values.append(raw)
+        if pool is not None and hasattr(pool, "all_secrets"):
+            values.extend(pool.all_secrets())
         return values
+
+    def public_config(self) -> dict[str, object]:
+        return {
+            "host": self.host,
+            "port": self.port,
+            "data_dir": self.data_dir,
+            "auth_dir": self.auth_dir,
+            "api_key_configured": self.has_api_key(),
+            "read_only": list(READ_ONLY_FIELDS),
+            "timezone": self.timezone,
+            "checkin_cron": self.checkin_cron,
+            "checkin_run_on_startup": self.checkin_run_on_startup,
+            "scheduler_enabled": self.scheduler_enabled,
+            "campaign_type": self.campaign_type,
+            "checkin_claim_all": self.checkin_claim_all,
+            "model_cache_ttl": self.model_cache_ttl,
+            "snap_base_url": self.snap_base_url,
+            "opengw_base_url": self.opengw_base_url,
+            "x_language": self.x_language,
+            "log_level": self.log_level,
+            "http_timeout": self.http_timeout,
+            "http_stream_timeout": self.http_stream_timeout,
+            "credential_source": self.credential_source,
+            "oauth_client_id": self.oauth_client_id,
+            "oauth_portal_url": self.oauth_portal_url,
+            "oauth_sts_url": self.oauth_sts_url,
+            "oauth_locale": self.oauth_locale,
+            "oauth_callback_port": self.oauth_callback_port,
+            "pool_strategy": self.pool_strategy,
+            "cooldown_seconds": self.cooldown_seconds,
+        }

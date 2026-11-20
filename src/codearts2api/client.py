@@ -48,24 +48,22 @@ class SnapAccessClient:
         self._http = http
         self._resolver = resolver or CredentialResolver(settings)
 
-    def _credential(self) -> ResolvedCredential:
+    def _credential(self, credential: ResolvedCredential | None = None) -> ResolvedCredential:
+        if credential is not None:
+            return credential
         try:
             return self._resolver.resolve()
         except RuntimeError as exc:
             raise UpstreamError(str(exc), 503) from exc
-
-    def _ak_sk(self) -> tuple[str, str]:
-        cred = self._credential()
-        return cred.access_key_id, cred.secret_access_key
-
-    def _token(self) -> str | None:
-        return self._credential().security_token
 
     def _unsigned_headers(self) -> dict[str, str] | None:
         language = self._settings.x_language
         if language:
             return {"X-Language": language}
         return None
+
+    def bind(self, credential: ResolvedCredential) -> "BoundSnapClient":
+        return BoundSnapClient(self, credential)
 
     def _build_url(self, path: str, query: dict[str, str] | None = None) -> str:
         base = self._settings.snap_base_url.rstrip("/") + "/"
@@ -80,22 +78,24 @@ class SnapAccessClient:
         url: str,
         body: bytes | None = None,
         headers: dict[str, str] | None = None,
+        credential: ResolvedCredential | None = None,
     ) -> dict[str, str]:
-        ak, sk = self._ak_sk()
+        cred = self._credential(credential)
         outgoing = dict(headers or {})
         if body and "Content-Type" not in {k.title() for k in outgoing} and not any(
             k.lower() == "content-type" for k in outgoing
         ):
             outgoing["Content-Type"] = "application/json"
+        project_id = cred.project_id if cred.project_id is not None else self._settings.codearts_project_id
         signed = sign_request(
             method=method,
             url=url,
-            ak=ak,
-            sk=sk,
+            ak=cred.access_key_id,
+            sk=cred.secret_access_key,
             headers=outgoing,
             body=body,
-            security_token=self._token(),
-            project_id=self._settings.codearts_project_id,
+            security_token=cred.security_token,
+            project_id=project_id,
             extra_unsigned_headers=self._unsigned_headers(),
         )
         return signed.headers
@@ -109,12 +109,15 @@ class SnapAccessClient:
         payload: Any = None,
         body: bytes | None = None,
         expected: tuple[int, ...] = (200, 201),
+        credential: ResolvedCredential | None = None,
     ) -> tuple[Any, int]:
         if body is None and payload is not None:
             body = json_body(payload)
         url = self._build_url(path, query)
-        headers = self.sign(method, url, body=body)
-        logger.info("upstream %s %s", method.upper(), path)
+        cred = self._credential(credential)
+        headers = self.sign(method, url, body=body, credential=cred)
+        label = cred.account_id or cred.source
+        logger.info("upstream %s %s account=%s", method.upper(), path, label)
         response = await self._http.request(
             method.upper(),
             url,
@@ -127,47 +130,60 @@ class SnapAccessClient:
             raise UpstreamError(message, response.status_code, parsed)
         return parsed, response.status_code
 
-    async def get_plugin_statistics(self) -> Any:
-        payload, _status = await self.request_json("GET", PLUGIN_STATISTICS_PATH)
+    async def get_plugin_statistics(self, credential: ResolvedCredential | None = None) -> Any:
+        payload, _status = await self.request_json("GET", PLUGIN_STATISTICS_PATH, credential=credential)
         return payload
 
-    async def list_builtin_models(self) -> Any:
-        payload, _status = await self.request_json("GET", MODELS_PATH)
+    async def list_builtin_models(self, credential: ResolvedCredential | None = None) -> Any:
+        payload, _status = await self.request_json("GET", MODELS_PATH, credential=credential)
         return payload
 
-    async def list_activities(self, channel: str = "IDE") -> Any:
+    async def list_activities(self, channel: str = "IDE", credential: ResolvedCredential | None = None) -> Any:
         payload, _status = await self.request_json(
             "GET",
             DELIVERY_PATH,
             query={"channel": channel},
+            credential=credential,
         )
         return payload
 
-    async def claim_campaign(self, campaign_id: Any, channel: str = "IDE") -> tuple[Any, int]:
+    async def claim_campaign(
+        self,
+        campaign_id: Any,
+        channel: str = "IDE",
+        credential: ResolvedCredential | None = None,
+    ) -> tuple[Any, int]:
         return await self.request_json(
             "POST",
             CLAIM_PATH,
             payload={"campaignId": campaign_id, "channel": channel},
             expected=tuple(range(200, 500)),
+            credential=credential,
         )
 
-    async def confirm_campaign(self, campaign_id: Any) -> tuple[Any, int]:
+    async def confirm_campaign(
+        self,
+        campaign_id: Any,
+        credential: ResolvedCredential | None = None,
+    ) -> tuple[Any, int]:
         return await self.request_json(
             "POST",
             CONFIRM_PATH,
             payload={"campaignId": campaign_id},
             expected=tuple(range(200, 500)),
+            credential=credential,
         )
 
-    async def post_chat(self, payload: dict[str, Any]) -> Any:
-        body, _status = await self.request_json("POST", CHAT_PATH, payload=payload)
+    async def post_chat(self, payload: dict[str, Any], credential: ResolvedCredential | None = None) -> Any:
+        body, _status = await self.request_json("POST", CHAT_PATH, payload=payload, credential=credential)
         return body
 
-    def stream_chat(self, payload: dict[str, Any]) -> httpx.Response:
+    def stream_chat(self, payload: dict[str, Any], credential: ResolvedCredential | None = None) -> httpx.Response:
         """Return an async context manager for a signed streaming POST."""
         body = json_body(payload)
         url = self._build_url(CHAT_PATH)
-        headers = self.sign("POST", url, body=body)
+        cred = self._credential(credential)
+        headers = self.sign("POST", url, body=body, credential=cred)
         headers.setdefault("Accept", "text/event-stream")
         timeout = httpx.Timeout(
             connect=self._settings.http_timeout,
@@ -175,10 +191,11 @@ class SnapAccessClient:
             write=self._settings.http_timeout,
             pool=self._settings.http_timeout,
         )
-        logger.info("upstream POST %s (stream)", CHAT_PATH)
+        label = cred.account_id or cred.source
+        logger.info("upstream POST %s (stream) account=%s", CHAT_PATH, label)
         return self._http.stream("POST", url, headers=headers, content=body, timeout=timeout)
 
-    async def claim_opengw_benefit(self) -> dict[str, Any]:
+    async def claim_opengw_benefit(self, credential: ResolvedCredential | None = None) -> dict[str, Any]:
         """Limited-time model benefit claim, as configured in the official CLI.
 
         Official CLI 26.11.11 (China production) uses
@@ -197,7 +214,7 @@ class SnapAccessClient:
         url = base.rstrip("/") + BENEFIT_CLAIM_PATH
         body = json_body({})
         extra = {"x-snap-traceid": uuid.uuid4().hex}
-        headers = self.sign("POST", url, body=body, headers=extra)
+        headers = self.sign("POST", url, body=body, headers=extra, credential=credential)
         response = await self._http.post(url, headers=headers, content=body)
         parsed = _parse_body(response)
         code = None
@@ -211,6 +228,32 @@ class SnapAccessClient:
             "payload": parsed if isinstance(parsed, (dict, list)) else {"raw": str(parsed)},
         }
 
+
+
+class BoundSnapClient:
+    """SnapAccessClient bound to one ResolvedCredential (check-in / per-account calls)."""
+
+    def __init__(self, client: SnapAccessClient, credential: ResolvedCredential) -> None:
+        self._client = client
+        self._credential = credential
+
+    async def get_plugin_statistics(self) -> Any:
+        return await self._client.get_plugin_statistics(credential=self._credential)
+
+    async def list_activities(self, channel: str = "IDE") -> Any:
+        return await self._client.list_activities(channel=channel, credential=self._credential)
+
+    async def claim_campaign(self, campaign_id: Any, channel: str = "IDE") -> tuple[Any, int]:
+        return await self._client.claim_campaign(campaign_id, channel=channel, credential=self._credential)
+
+    async def confirm_campaign(self, campaign_id: Any) -> tuple[Any, int]:
+        return await self._client.confirm_campaign(campaign_id, credential=self._credential)
+
+    async def claim_opengw_benefit(self) -> dict[str, Any]:
+        return await self._client.claim_opengw_benefit(credential=self._credential)
+
+    async def list_builtin_models(self) -> Any:
+        return await self._client.list_builtin_models(credential=self._credential)
 
 
 def _parse_body(response: httpx.Response) -> Any:
