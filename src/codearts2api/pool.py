@@ -653,6 +653,8 @@ def apply_settings_overlay(settings: Settings, overlay: dict[str, Any]) -> None:
             if value:
                 settings.api_key = SecretStr(str(value))
             continue
+        if key == "credential_source" and value is not None:
+            value = normalize_credential_source(str(value))
         setattr(settings, key, value)
 
 
@@ -695,10 +697,10 @@ def validate_settings_update(updates: dict[str, Any]) -> dict[str, Any]:
         cleaned["pool_strategy"] = strategy
 
     if "credential_source" in cleaned and cleaned["credential_source"] is not None:
-        source = str(cleaned["credential_source"]).strip().lower()
-        if source not in {"auto", "oauth", "env"}:
-            raise ValueError("credential_source must be auto, oauth, or env")
-        cleaned["credential_source"] = source
+        try:
+            cleaned["credential_source"] = normalize_credential_source(str(cleaned["credential_source"]))
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
 
     if "log_level" in cleaned and cleaned["log_level"] is not None:
         level = str(cleaned["log_level"]).strip().upper()
@@ -791,9 +793,21 @@ def collect_redaction_secrets(settings: Settings, pool: AccountPool | None) -> l
     return unique
 
 
+def normalize_credential_source(value: str) -> str:
+    normalized = value.strip().lower()
+    if normalized == "env":
+        normalized = "aksk"
+    if normalized not in {"auto", "oauth", "aksk"}:
+        raise ValueError("credential_source must be auto, oauth, or aksk")
+    return normalized
+
+
 def allowed_kinds(credential_source: str) -> set[str] | None:
-    if credential_source == "oauth":
+    source = credential_source.strip().lower()
+    if source == "env":
+        source = "aksk"
+    if source == "oauth":
         return {"oauth"}
-    if credential_source == "env":
+    if source == "aksk":
         return {"aksk"}
     return None

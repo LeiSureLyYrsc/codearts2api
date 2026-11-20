@@ -70,7 +70,7 @@ class CredentialResolver:
         if kinds is not None and account.kind not in kinds:
             raise RuntimeError(
                 f"Account {account.name} ({account.id}) is {account.kind}, "
-                f"but CA2A_CREDENTIAL_SOURCE={self.settings.credential_source}"
+                f"but credential_source={self.settings.credential_source}"
             )
         if account.kind == "aksk":
             if not account.has_aksk():
@@ -121,16 +121,18 @@ class CredentialResolver:
         if last_error is not None:
             raise last_error
         source = self.settings.credential_source
-        if source == "env":
+        if source in {"env", "aksk"}:
             env = self.env_credential()
             if env is not None:
                 return env
-            raise RuntimeError("CODEARTS_AK / CODEARTS_SK are not configured")
+            raise RuntimeError(
+                "No usable AK/SK account in the pool. Add one in the WebUI or data/config.json."
+            )
         if source == "oauth":
             raise RuntimeError("No usable OAuth account in the pool; run: uv run codearts2api login")
         raise RuntimeError(
-            "No credentials available. Add an account in the WebUI, "
-            "run `uv run codearts2api login`, or set CODEARTS_AK and CODEARTS_SK."
+            "No credentials available. Add an AK/SK account in the WebUI or data/config.json, "
+            "or run `uv run codearts2api login`."
         )
 
     def has_any(self) -> bool:

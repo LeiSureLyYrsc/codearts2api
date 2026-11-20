@@ -29,7 +29,7 @@ async def require_api_key(
     if not settings.has_api_key():
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Gateway API key is not configured (set CA2A_API_KEY or CODEARTS2API_API_KEY)",
+            detail="Gateway API key is not configured (set CA2A_API_KEY, or save one in the WebUI / data/config.json)",
         )
     expected = settings.api_key.get_secret_value()  # type: ignore[union-attr]
     if credentials is None or credentials.scheme.lower() != "bearer":
@@ -52,7 +52,7 @@ def require_upstream_credentials(settings: Settings) -> None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=(
-                "No enabled accounts in the pool. Add an account in the WebUI, "
-                "run `uv run codearts2api login`, or set CODEARTS_AK and CODEARTS_SK."
+                "No enabled accounts in the pool. Add an AK/SK account in the WebUI "
+                "or data/config.json, or run `uv run codearts2api login`."
             ),
         )

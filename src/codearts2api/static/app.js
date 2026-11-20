@@ -421,7 +421,8 @@
     ];
     names.forEach((name) => {
       if (!(name in form)) return;
-      const value = config[name];
+      let value = config[name];
+      if (name === "credential_source" && value === "env") value = "aksk";
       form[name].value = value == null ? "" : value;
     });
     form.scheduler_enabled.checked = Boolean(config.scheduler_enabled);

@@ -7,9 +7,9 @@
 1. **官方客户端同款浏览器 SSO / OAuth**（推荐，不必粘贴长期 AK/SK）
 2. 你自己的华为云 IAM **永久 AK/SK**（以及可选的 STS `X-Security-Token`）
 
-`.env` 里的 `CODEARTS_AK` / `CODEARTS_SK` 只是可选的**首次启动引导**：若账号池还是空的，会从环境变量导入一个启用中的账号。导入之后，账号池文件（默认 `data/config.json`）才是凭证的权威来源；在 WebUI 里新增的账号不会在重启时被清掉。
+`AK/SK 请写在账号池文件（默认 `data/config.json`）或在 WebUI 里添加，不要放进 `.env`。可以把仓库根目录的 `config.example.json` 复制为 `data/config.json` 后填入密钥。旧的 `CODEARTS_AK` / `CODEARTS_SK` 环境变量仍可作为空池时的一次性导入，但不推荐再使用。
 
-大多数运行配置（时区、签到 cron、调度开关、账号池策略、上游超时等）都可以在 WebUI 里修改并写入数据目录，不必只靠环境变量。`CA2A_HOST` / `CA2A_PORT` 仍只能通过环境变量设置；`CA2A_API_KEY` 至少要在 `.env` 里提供一份启动默认值（也可随后在 WebUI 里更换并立即生效）。
+时区、签到 cron、调度开关、账号池策略、上游超时等运行配置同样写在 `data/config.json`，也可在 WebUI 里修改。`.env` 只保留：启动用的 `CA2A_API_KEY`（随后可在 WebUI 更换并持久化）、仅能通过环境变量设置的监听地址 `CA2A_HOST` / `CA2A_PORT`，以及可选的数据目录 `CA2A_DATA_DIR` / `CA2A_AUTH_DIR`。
 
 对话请求按配置的策略在启用账号之间轮换，并在上游返回 401/403/429/5xx 时把该账号放入冷却并改用其他账号（只做故障转移，不是插队或绕过限流）。每日签到和权益领取会**分别对每个已启用账号**执行。
 
@@ -40,7 +40,7 @@
 - `https://cnnorth4-cloudide-marketplace.obs.cn-north-4.myhuaweicloud.com/codearts/cli_tui/install_script/install.sh`
 - `https://codearts-agent-obs-cdn.huaweicloud.com/codearts/cli_tui/latest/codearts-install-26.11.11-linux-x64.tar.gz`
 
-从该官方 `agentkernel` 中核对到的中国站生产常量与行为（见下文「OAuth / SSO」和「opengw 权益」）。**官方 IDE / 插件安装包体积很大，本次未完整解包核对其 client_id**；若你使用的是 IDE 而不是 CLI，其 `client_id` 可能不同，可用 `CA2A_OAUTH_CLIENT_ID` 覆盖。默认值 `CodeArts_Tui` 来自官方 CLI。
+从该官方 `agentkernel` 中核对到的中国站生产常量与行为（见下文「OAuth / SSO」和「opengw 权益」）。**官方 IDE / 插件安装包体积很大，本次未完整解包核对其 client_id**；若你使用的是 IDE 而不是 CLI，其 `client_id` 可能不同，可在 `data/config.json` 的 `settings.oauth_client_id` 或 WebUI 中覆盖。默认值 `CodeArts_Tui` 来自官方 CLI。
 
 官网下载页前端脚本中还有门户会话接口 `https://codearts.huaweicloud.com/portal/snap-manager/v1/sso/user`，这是网页门户读当前登录用户用的，本网关不走浏览器 Cookie，因此不使用它。
 
@@ -76,7 +76,7 @@ https://snap-access.cn-north-4.myhuaweicloud.com
 3. `signature = Hex(HMAC-SHA256(SK, StringToSign))`。
 4. `Authorization: SDK-HMAC-SHA256 Access={AK}, SignedHeaders=..., Signature=...`。
 
-若存在临时安全令牌，加入**已签名**的 `X-Security-Token`。若配置了 `CODEARTS_PROJECT_ID`，加入已签名的 `X-Project-Id`。部分官方客户端会在签名完成后再附加 `X-Language`；未参与签名的头不能写入规范请求。可用 `CA2A_X_LANGUAGE` 配置（默认不发送）。
+若存在临时安全令牌，加入**已签名**的 `X-Security-Token`。若账号配置了 `project_id`，加入已签名的 `X-Project-Id`。部分官方客户端会在签名完成后再附加 `X-Language`；未参与签名的头不能写入规范请求。可在 `data/config.json` 的 `settings.x_language` 或 WebUI 中配置（默认不发送）。
 
 ### 3. OAuth / SSO（官方 CLI 浏览器授权）
 
@@ -97,7 +97,7 @@ https://snap-access.cn-north-4.myhuaweicloud.com
 
 门户回调地址被官方客户端写成环回地址，因此授权必须在能访问本机 `127.0.0.1:<port>` 的浏览器中完成。在远程服务器上登录时，请在自己电脑上做 SSH 本地端口转发，或直接在有浏览器的那台机器上执行 `uv run codearts2api login`。`--print-only` 只是不自动打开浏览器、把授权 URL 打印出来，仍然在本机等待回调。
 
-`CA2A_CREDENTIAL_SOURCE`（默认 `auto`）现在用来筛选账号池类型：`auto` 使用全部启用账号，`oauth` 只用 OAuth 账号，`env` 只用 AK/SK 账号。对话使用的具体账号由账号池策略决定（默认 `round_robin`，也可选 `first_available` 或 `random`）。
+`settings.credential_source`（默认 `auto`）用来筛选账号池类型：`auto` 使用全部启用账号，`oauth` 只用 OAuth 账号，`aksk` 只用 AK/SK 账号（旧值 `env` 仍被接受，并按 `aksk` 处理）。对话使用的具体账号由账号池策略决定（默认 `round_robin`，也可选 `first_available` 或 `random`）。
 
 ### 4. 动态模型列表
 
@@ -134,8 +134,10 @@ uv run codearts2api login --account 上班
 # 无桌面环境、只想打印链接：
 uv run codearts2api login --print-only
 
-# 方式 B：在 .env 中填写自己的 IAM AK/SK（可选 CODEARTS_SECURITY_TOKEN）
-# 首次启动时会导入为名为 env 的账号；之后请以 WebUI / data/config.json 为准
+# 方式 B：在 data/config.json 中填写自己的 IAM AK/SK（以及可选的签到时间等）
+mkdir -p data
+cp config.example.json data/config.json
+# 编辑 accounts 里的 ak / sk，按需修改 settings.checkin_cron 等
 ```
 
 启动网关：
@@ -164,7 +166,7 @@ uv run pytest
 
 [`ghcr.io/leisurelyyrsc/codearts2api:latest`](https://github.com/LeiSureLyYrsc/codearts2api/pkgs/container/codearts2api)
 
-`docker-compose.yml` 已指向该 `latest` 标签。先复制 `.env.example` 为 `.env`，**必须**设置 `CA2A_API_KEY`。IAM AK/SK 现在是可选的引导配置；也可以先启动，再在 WebUI 里添加账号。容器监听 `0.0.0.0:8787`，默认只映射到宿主机的 `127.0.0.1:8787`。控制台在 http://127.0.0.1:8787/ 。
+`docker-compose.yml` 已指向该 `latest` 标签。先复制 `.env.example` 为 `.env`，**必须**设置 `CA2A_API_KEY`。AK/SK 与定时签到等运行配置请写入挂载的 `data/config.json`（可从 `config.example.json` 复制）；也可以先启动，再在 WebUI 里添加账号或修改签到时间。容器监听 `0.0.0.0:8787`，默认只映射到宿主机的 `127.0.0.1:8787`。控制台在 http://127.0.0.1:8787/ 。
 
 ```bash
 cp .env.example .env
@@ -177,33 +179,50 @@ docker compose up -d
 
 ## 配置说明
 
+推荐把账号凭证和运行配置写在 `data/config.json`（可先复制仓库根目录的 `config.example.json`），也可在 WebUI「账号池 / 运行配置」里修改。`.env` 只保留密钥启动默认值和进程级参数。
+
+### 环境变量
+
 | 变量 | 说明 | 默认 |
 | --- | --- | --- |
-| `CODEARTS_AK` / `CODEARTS_SK` | 可选的首次引导 IAM 密钥；账号池为空时导入为 `env` 账号 | 空 |
-| `CODEARTS_SECURITY_TOKEN` | 可选 STS 令牌，作为已签名的 `X-Security-Token` | 空 |
-| `CODEARTS_PROJECT_ID` | 可选，已签名的 `X-Project-Id` | 空 |
-| `CA2A_CREDENTIAL_SOURCE` | `auto` / `oauth` / `env`（筛选账号池类型） | `auto` |
-| `CA2A_AUTH_DIR` | OAuth 会话目录 | `auths` |
+| `CA2A_API_KEY` 或 `CODEARTS2API_API_KEY` | 保护 `/v1/*` 与 `/admin/*` 的启动默认值；也可在 WebUI 更换并写入 `data/config.json` | 空（未配置则受保护接口返回 503） |
+| `CA2A_HOST` / `CA2A_PORT` | 本地监听（仅环境变量，不能在 WebUI 或配置文件中修改） | `127.0.0.1` / `8787` |
 | `CA2A_DATA_DIR` | 账号池与运行配置目录（`config.json`，权限 0600） | `data` |
-| `CA2A_POOL_STRATEGY` | `round_robin` / `first_available` / `random` | `round_robin` |
-| `CA2A_COOLDOWN_SECONDS` | 上游 401/403/429/5xx 后的账号冷却秒数 | `60` |
-| `CA2A_OAUTH_CLIENT_ID` | 官方 CLI 为 `CodeArts_Tui` | `CodeArts_Tui` |
-| `CA2A_OAUTH_PORTAL_URL` | 官方门户 | `https://codearts.huaweicloud.com/portal` |
-| `CA2A_OAUTH_STS_URL` | 官方 CLI 使用的 STS | `https://sts.cn-north-4.myhuaweicloud.com` |
-| `CA2A_OAUTH_CALLBACK_PORT` | 本机回调端口，0 表示系统分配 | `0` |
-| `SNAP_BASE_URL` | snap-access 网关 | `https://snap-access.cn-north-4.myhuaweicloud.com` |
-| `OPENGW_BASE_URL` | 官方 CLI 中的权益网关 | `https://opengw.developer.huaweicloud.com` |
-| `CA2A_HOST` / `CA2A_PORT` | 本地监听（仅环境变量，不能在 WebUI 修改） | `127.0.0.1` / `8787` |
-| `CA2A_API_KEY` 或 `CODEARTS2API_API_KEY` | 保护 `/v1/*` 与 `/admin/*` 的启动默认值；也可在 WebUI 更换并持久化 | 空（未配置则受保护接口返回 503） |
-| `CA2A_CHECKIN_CRON` | 5 段 cron | `0 8 * * *` |
-| `CA2A_TIMEZONE` | 调度时区 | `Asia/Shanghai` |
-| `CA2A_CHECKIN_RUN_ON_STARTUP` | 启动时立即签到 | `true` |
-| `CA2A_CAMPAIGN_TYPE` | 默认定向匹配的活动类型 | `USER_LOGIN` |
-| `CA2A_CHECKIN_CLAIM_ALL` | 是否同时领取其他可领取活动 | `false` |
-| `CA2A_MODEL_CACHE_TTL` | 模型列表缓存秒数 | `60` |
-| `CA2A_LOG_LEVEL` | 日志级别 | `INFO` |
+| `CA2A_AUTH_DIR` | OAuth 会话目录 | `auths` |
 
-日志为结构化 JSON，不会输出 AK/SK/令牌，并对日志中的密钥值脱敏。上表中除 `CA2A_HOST` / `CA2A_PORT` 以及作为启动默认值的 `CA2A_API_KEY` 外，其余项都可以在 WebUI「运行配置」里覆盖；修改时区、cron 或调度开关时，进程内 APScheduler 会重新安排，无需重启。`env` 账号若仍存在，会在启动时与当前环境变量中的 AK/SK 同步；WebUI 新建的账号不受此影响。
+为保持兼容，旧的 `CODEARTS_AK` / `CODEARTS_SK`（以及可选的 `CODEARTS_SECURITY_TOKEN`、`CODEARTS_PROJECT_ID`）在账号池为空时仍会导入为名为 `env` 的账号；若该账号还在，启动时会与当前环境变量同步。新部署请把密钥写进 `data/config.json` 的 `accounts`。其余曾出现在 `.env` 中的运行项（签到 cron、时区、超时等）仍可被环境变量覆盖，但一旦写入 `data/config.json` 或在 WebUI 中保存，以配置文件为准。
+
+### `data/config.json`
+
+`settings` 中的常用项：
+
+| 字段 | 说明 | 默认 |
+| --- | --- | --- |
+| `timezone` | 调度时区 | `Asia/Shanghai` |
+| `checkin_cron` | 5 段 cron | `0 8 * * *` |
+| `checkin_run_on_startup` | 启动时立即签到 | `true` |
+| `scheduler_enabled` | 是否启用进程内定时签到 | `true` |
+| `campaign_type` | 默认定向匹配的活动类型 | `USER_LOGIN` |
+| `checkin_claim_all` | 是否同时领取其他可领取活动 | `false` |
+| `model_cache_ttl` | 模型列表缓存秒数 | `60` |
+| `snap_base_url` | snap-access 网关 | `https://snap-access.cn-north-4.myhuaweicloud.com` |
+| `opengw_base_url` | 官方 CLI 中的权益网关 | `https://opengw.developer.huaweicloud.com` |
+| `x_language` | 签名后再附加的 `X-Language`，默认不发送 | 空 |
+| `log_level` | 日志级别 | `INFO` |
+| `http_timeout` / `http_stream_timeout` | 上游 HTTP 超时（秒）；流式读取可更长 | `60` / `300` |
+| `credential_source` | `auto` / `oauth` / `aksk`（筛选账号池类型） | `auto` |
+| `pool_strategy` | `round_robin` / `first_available` / `random` | `round_robin` |
+| `cooldown_seconds` | 上游 401/403/429/5xx 后的账号冷却秒数 | `60` |
+| `oauth_client_id` | 官方 CLI 为 `CodeArts_Tui` | `CodeArts_Tui` |
+| `oauth_portal_url` | 官方门户 | `https://codearts.huaweicloud.com/portal` |
+| `oauth_sts_url` | 官方 CLI 使用的 STS | `https://sts.cn-north-4.myhuaweicloud.com` |
+| `oauth_locale` | 授权页语言 | `zh-cn` |
+| `oauth_callback_port` | 本机回调端口，0 表示系统分配 | `0` |
+| `api_key` | 可选，WebUI 保存后的网关密钥；未写入时使用环境变量 | 空 |
+
+`accounts` 数组存放上游凭证。AK/SK 账号使用 `"kind": "aksk"`，字段包括 `ak`、`sk`，以及可选的 `security_token`、`project_id`。OAuth 账号使用 `"kind": "oauth"`，会话文件放在 `CA2A_AUTH_DIR`。
+
+日志为结构化 JSON，不会输出 AK/SK/令牌，并对日志中的密钥值脱敏。在 WebUI 中修改时区、cron 或调度开关时，进程内 APScheduler 会重新安排，无需重启。
 
 ## 多号池与 WebUI
 

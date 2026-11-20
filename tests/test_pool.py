@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import sys
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -42,7 +44,8 @@ def test_migrate_from_env_aksk(tmp_path) -> None:  # type: ignore[no-untyped-def
     assert account.ak == "env-ak-value"
     assert account.sk == "env-sk-value"
     assert pool.path.is_file()
-    assert pool.path.stat().st_mode & 0o777 == 0o600
+    if sys.platform != "win32":
+        assert pool.path.stat().st_mode & 0o777 == 0o600
 
     # Restart: env account stays in sync; a UI account is not wiped.
     pool.add_account(name="work", kind="aksk", ak="ui-ak", sk="ui-sk")
@@ -289,3 +292,49 @@ def test_public_account_masks_secrets(tmp_path) -> None:  # type: ignore[no-unty
     secrets = pool.all_secrets()
     assert "super-secret-sk" in secrets
     assert "ABCDEFG12345" in secrets
+
+def test_config_example_json_is_loadable(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    import json
+    import shutil
+
+    from codearts2api.config import OVERRIDABLE_FIELDS
+    from codearts2api.pool import Account
+
+    example = Path(__file__).resolve().parents[1] / "config.example.json"
+    payload = json.loads(example.read_text(encoding="utf-8"))
+    assert payload["version"] == 1
+    settings_block = payload["settings"]
+    unknown = [key for key in settings_block if key not in OVERRIDABLE_FIELDS]
+    assert unknown == []
+    assert "api_key" not in settings_block
+    assert settings_block["checkin_cron"] == "0 8 * * *"
+    assert settings_block["timezone"] == "Asia/Shanghai"
+    assert settings_block["scheduler_enabled"] is True
+    accounts = [Account.from_storage(item) for item in payload["accounts"]]
+    assert accounts[0].kind == "aksk"
+    assert accounts[0].ak == "YOUR_ACCESS_KEY_ID"
+
+    dest = tmp_path / "data"
+    dest.mkdir()
+    shutil.copy(example, dest / "config.json")
+    settings = _settings(tmp_path, checkin_cron="0 0 * * *", timezone="UTC")
+    pool = AccountPool(settings)
+    pool.load_or_migrate()
+    assert pool.settings.checkin_cron == "0 8 * * *"
+    assert pool.settings.timezone == "Asia/Shanghai"
+    assert pool.settings.scheduler_enabled is True
+    assert len(pool.accounts) == 1
+    assert pool.accounts[0].ak == "YOUR_ACCESS_KEY_ID"
+
+
+def test_credential_source_env_alias_normalizes_to_aksk(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    from codearts2api.pool import allowed_kinds, normalize_credential_source
+
+    settings = _settings(tmp_path, credential_source="env")
+    assert settings.credential_source == "aksk"
+    assert normalize_credential_source("env") == "aksk"
+    assert normalize_credential_source("AKSK") == "aksk"
+    assert allowed_kinds("env") == {"aksk"}
+    assert allowed_kinds("aksk") == {"aksk"}
+    assert allowed_kinds("oauth") == {"oauth"}
+    assert allowed_kinds("auto") is None

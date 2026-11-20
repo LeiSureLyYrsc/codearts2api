@@ -1,4 +1,10 @@
-"""Environment-driven settings. Secrets must come from the environment, never from source."""
+"""Runtime settings.
+
+Non-secret options belong in data/config.json (see config.example.json) or the WebUI.
+Environment variables remain valid overrides for local/dev and for process-only
+values (host, port, data_dir, auth_dir). Secrets such as CA2A_API_KEY may come from
+the environment or be persisted in the config file after a WebUI save.
+"""
 
 from __future__ import annotations
 
@@ -8,8 +14,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 DEFAULT_SNAP_BASE_URL = "https://snap-access.cn-north-4.myhuaweicloud.com"
 DEFAULT_TIMEZONE = "Asia/Shanghai"
 
-# Fields that may be overridden by data/config.json and the WebUI.
-# host / port stay env-only (process bind). api_key is overridable once persisted.
+# Fields stored in data/config.json and editable from the WebUI.
+# host / port / data_dir / auth_dir stay env-only (process bind and paths).
+# api_key may be bootstrapped from env and later persisted.
 OVERRIDABLE_FIELDS = (
     "timezone",
     "checkin_cron",
@@ -180,8 +187,10 @@ class Settings(BaseSettings):
     @classmethod
     def _credential_source(cls, value: str) -> str:
         normalized = value.strip().lower()
-        if normalized not in {"auto", "oauth", "env"}:
-            raise ValueError("CA2A_CREDENTIAL_SOURCE must be auto, oauth, or env")
+        if normalized == "env":
+            normalized = "aksk"
+        if normalized not in {"auto", "oauth", "aksk"}:
+            raise ValueError("credential_source must be auto, oauth, or aksk")
         return normalized
 
     @field_validator("pool_strategy")

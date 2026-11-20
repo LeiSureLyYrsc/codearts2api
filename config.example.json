@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "settings": {
+    "timezone": "Asia/Shanghai",
+    "checkin_cron": "0 8 * * *",
+    "checkin_run_on_startup": true,
+    "scheduler_enabled": true,
+    "campaign_type": "USER_LOGIN",
+    "checkin_claim_all": false,
+    "model_cache_ttl": 60,
+    "snap_base_url": "https://snap-access.cn-north-4.myhuaweicloud.com",
+    "opengw_base_url": "https://opengw.developer.huaweicloud.com",
+    "x_language": null,
+    "log_level": "INFO",
+    "http_timeout": 60,
+    "http_stream_timeout": 300,
+    "credential_source": "auto",
+    "oauth_client_id": "CodeArts_Tui",
+    "oauth_portal_url": "https://codearts.huaweicloud.com/portal",
+    "oauth_sts_url": "https://sts.cn-north-4.myhuaweicloud.com",
+    "oauth_locale": "zh-cn",
+    "oauth_callback_port": 0,
+    "pool_strategy": "round_robin",
+    "cooldown_seconds": 60
+  },
+  "accounts": [
+    {
+      "id": "primary",
+      "name": "primary",
+      "kind": "aksk",
+      "enabled": true,
+      "note": "IAM access key. Create at https://console.huaweicloud.com/iam/#/mine/accessKey",
+      "ak": "YOUR_ACCESS_KEY_ID",
+      "sk": "YOUR_SECRET_ACCESS_KEY",
+      "security_token": null,
+      "project_id": null
+    }
+  ],
+  "pool": {
+    "rr_index": 0
+  }
+}
