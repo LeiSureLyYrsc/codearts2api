@@ -298,11 +298,10 @@ def test_config_example_json_is_loadable(tmp_path) -> None:  # type: ignore[no-u
     import shutil
 
     from codearts2api.config import OVERRIDABLE_FIELDS
-    from codearts2api.pool import Account
 
     example = Path(__file__).resolve().parents[1] / "config.example.json"
     payload = json.loads(example.read_text(encoding="utf-8"))
-    assert payload["version"] == 1
+    assert payload["version"] == 2
     settings_block = payload["settings"]
     unknown = [key for key in settings_block if key not in OVERRIDABLE_FIELDS]
     assert unknown == []
@@ -310,9 +309,7 @@ def test_config_example_json_is_loadable(tmp_path) -> None:  # type: ignore[no-u
     assert settings_block["checkin_cron"] == "0 8 * * *"
     assert settings_block["timezone"] == "Asia/Shanghai"
     assert settings_block["scheduler_enabled"] is True
-    accounts = [Account.from_storage(item) for item in payload["accounts"]]
-    assert accounts[0].kind == "aksk"
-    assert accounts[0].ak == "YOUR_ACCESS_KEY_ID"
+    assert "accounts" not in payload
 
     dest = tmp_path / "data"
     dest.mkdir()
@@ -323,8 +320,7 @@ def test_config_example_json_is_loadable(tmp_path) -> None:  # type: ignore[no-u
     assert pool.settings.checkin_cron == "0 8 * * *"
     assert pool.settings.timezone == "Asia/Shanghai"
     assert pool.settings.scheduler_enabled is True
-    assert len(pool.accounts) == 1
-    assert pool.accounts[0].ak == "YOUR_ACCESS_KEY_ID"
+    assert pool.accounts == []
 
 
 def test_credential_source_env_alias_normalizes_to_aksk(tmp_path) -> None:  # type: ignore[no-untyped-def]

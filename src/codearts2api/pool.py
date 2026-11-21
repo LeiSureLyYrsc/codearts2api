@@ -18,6 +18,7 @@ from zoneinfo import ZoneInfo
 from apscheduler.triggers.cron import CronTrigger
 from pydantic import SecretStr
 
+from codearts2api.account_files import AccountSessionStore, account_filename, validate_auth_file, write_private_json
 from codearts2api.config import OVERRIDABLE_FIELDS, Settings
 from codearts2api.oauth.session import SESSION_FILENAME, OAuthSession, SessionStore
 
@@ -126,12 +127,13 @@ class Account:
 
 
 class AccountPool:
-    """Source of truth for accounts and overridable runtime settings (data/config.json)."""
+    """Runtime settings in config.json; credentials in separate per-account auth files."""
 
     def __init__(self, settings: Settings, session_store: SessionStore | None = None) -> None:
         self.settings = settings
         self.data_dir = Path(settings.data_dir)
         self.path = self.data_dir / CONFIG_FILENAME
+        self.accounts_dir = self.data_dir / "accounts"
         self.session_store = session_store or SessionStore(settings.auth_dir)
         self.accounts: list[Account] = []
         self.persisted_settings: dict[str, Any] = {}
@@ -147,59 +149,102 @@ class AccountPool:
         with self._lock:
             self._load_file()
             self._apply_persisted_settings()
-            changed = self._migrate()
-            if changed or not self.path.is_file():
-                # Always write after first load so the file becomes the source of truth
-                # once any account was seeded; skip write if still empty and nothing to persist.
-                if self.accounts or self.persisted_settings:
-                    self._save_unlocked()
+            self._migrate()
+            # Always materialize defaults, including on an empty first start.
+            # Write all auth files BEFORE removing credentials from legacy config.
+            self._save_unlocked()
             self._loaded = True
 
     def _load_file(self) -> None:
-        if not self.path.is_file():
-            self.accounts = []
-            self.persisted_settings = {}
-            self.api_key_persisted = False
-            return
-        try:
-            payload = json.loads(self.path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            logger.exception("Failed to read pool config %s", self.path)
-            self.accounts = []
-            self.persisted_settings = {}
-            return
-        if not isinstance(payload, dict):
-            self.accounts = []
-            self.persisted_settings = {}
-            return
-        raw_accounts = payload.get("accounts") or []
-        self.accounts = [
-            Account.from_storage(item) for item in raw_accounts if isinstance(item, dict)
-        ]
-        settings_block = payload.get("settings") if isinstance(payload.get("settings"), dict) else {}
-        self.persisted_settings = dict(settings_block)
-        self.api_key_persisted = bool(self.persisted_settings.get("api_key"))
-        pool_block = payload.get("pool") if isinstance(payload.get("pool"), dict) else {}
-        if "rr_index" in pool_block:
+        payload: dict[str, Any] = {}
+        if self.path.is_file():
             try:
-                self._rr_index = int(pool_block["rr_index"])
-            except (TypeError, ValueError):
-                self._rr_index = 0
+                payload = json.loads(self.path.read_text(encoding="utf-8-sig"))
+            except (OSError, ValueError):
+                raise ValueError("Cannot read runtime config; refusing to overwrite it") from None
+            if not isinstance(payload, dict):
+                raise ValueError("Runtime config must be a JSON object")
+        if "version" in payload and (type(payload["version"]) is not int or payload["version"] not in {1, 2}):
+            raise ValueError("Unsupported runtime config version; refusing to overwrite")
+        raw_accounts = payload.get("accounts", [])
+        if not isinstance(raw_accounts, list) or any(not isinstance(x, dict) for x in raw_accounts):
+            raise ValueError("Invalid legacy accounts; config was not modified")
+        self.accounts = []
+        for path in sorted(self.accounts_dir.glob("*.json")):
+            try:
+                record = json.loads(path.read_text(encoding="utf-8-sig"))
+                data, _ = validate_auth_file(record)
+                if path.name != account_filename(data["id"]):
+                    raise ValueError("Account filename does not match id")
+                if self.get(data["id"]) is not None:
+                    raise ValueError("Duplicate account id")
+                self.accounts.append(Account.from_storage(data))
+            except (OSError, ValueError):
+                raise ValueError(f"Invalid account auth file: {path.name}; refusing to overwrite") from None
+        for item in raw_accounts:
+            account = Account.from_storage(item)
+            validate_auth_file({"version": 1, "account": account.to_storage()})
+            existing = self.get(account.id)
+            if existing is not None:
+                if existing.to_storage() != account.to_storage():
+                    raise ValueError("Legacy migration conflicts with an existing auth file")
+            else:
+                self.accounts.append(account)
+        # File iteration order must not randomize first_available after a restart.
+        self.accounts.sort(key=lambda account: account.created_at or "")
+        block = payload.get("settings", {})
+        if not isinstance(block, dict):
+            raise ValueError("Runtime settings must be a JSON object")
+        # Credentials are never accepted as runtime settings.
+        self.persisted_settings = {k: v for k, v in block.items() if k in OVERRIDABLE_FIELDS}
+        self.api_key_persisted = bool(self.persisted_settings.get("api_key"))
+        pool_block = payload.get("pool") or {}
+        try:
+            self._rr_index = int(pool_block.get("rr_index", 0))
+        except (AttributeError, TypeError, ValueError):
+            self._rr_index = 0
 
     def _save_unlocked(self) -> None:
-        self.data_dir.mkdir(parents=True, exist_ok=True)
-        payload = {
-            "version": 1,
-            "settings": self.persisted_settings,
-            "accounts": [account.to_storage() for account in self.accounts],
-            "pool": {"rr_index": self._rr_index},
-        }
-        tmp = self.path.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-        os.chmod(tmp, 0o600)
-        tmp.replace(self.path)
-        os.chmod(self.path, 0o600)
-        logger.info("Runtime config saved to %s accounts=%s", self.path, len(self.accounts))
+        self.accounts_dir.mkdir(parents=True, exist_ok=True)
+        paths = [account_filename(a.id).casefold() for a in self.accounts]
+        if len(set(paths)) != len(paths):
+            raise ValueError("Conflicting account filenames; migration stopped")
+        migrated_sessions = []
+        for account in self.accounts:
+            path = self.accounts_dir / account_filename(account.id)
+            payload = {"version": 1, "account": account.to_storage()}
+            if path.is_file():
+                old = json.loads(path.read_text(encoding="utf-8-sig"))
+                if "oauth_session" in old:
+                    payload["oauth_session"] = old["oauth_session"]
+            if account.kind == "oauth" and "oauth_session" not in payload:
+                filename = account.session_file or f"{account.id}.json"
+                if not filename or Path(filename).name != filename or "/" in filename or "\\" in filename:
+                    raise ValueError("Unsafe legacy session filename")
+                legacy = self.session_store.for_file(filename)
+                session = legacy.load()
+                if legacy.path.is_file() and session is None:
+                    raise ValueError("Invalid legacy OAuth session; migration stopped")
+                if session:
+                    payload["oauth_session"] = session.to_dict()
+                    migrated_sessions.append(legacy.path)
+            # A prior interrupted migration may have written the auth file already.
+            if account.kind == "oauth" and "oauth_session" in payload and account.session_file:
+                legacy = self.session_store.for_file(account.session_file)
+                if legacy.path.is_file():
+                    old_session = legacy.load()
+                    if old_session and old_session.to_dict() == payload["oauth_session"]:
+                        migrated_sessions.append(legacy.path)
+            write_private_json(path, payload)
+        # Persist only application settings; never bootstrap secrets/credentials.
+        defaults = {key: getattr(self.settings, key) for key in OVERRIDABLE_FIELDS if key != "api_key"}
+        defaults.update(self.persisted_settings)
+        self.persisted_settings = defaults
+        write_private_json(self.path, {
+            "version": 2, "settings": defaults, "pool": {"rr_index": self._rr_index},
+        })
+        for path in set(migrated_sessions):
+            path.unlink(missing_ok=True)
 
     def save(self) -> None:
         with self._lock:
@@ -294,6 +339,61 @@ class AccountPool:
         if self.persisted_settings.get("api_key"):
             self.api_key_persisted = True
 
+    def export_account(self, account_id: str) -> dict[str, Any]:
+        with self._lock:
+            account = self.get(account_id)
+            if account is None:
+                raise KeyError(account_id)
+            payload = {"version": 1, "account": account.to_storage()}
+            if account.kind == "oauth":
+                session = self.session_store_for(account).load()
+                if session:
+                    payload["oauth_session"] = session.to_dict()
+            return payload
+
+    def import_accounts(self, files: list[dict[str, Any]]) -> list[Account]:
+        if not files or len(files) > 100:
+            raise ValueError("Import between 1 and 100 auth files")
+        parsed = [validate_auth_file(payload) for payload in files]
+        with self._lock:
+            ids = {a.id.casefold() for a in self.accounts}
+            names = {a.name.strip().casefold() for a in self.accounts}
+            filenames = {account_filename(a.id).casefold() for a in self.accounts}
+            planned = []
+            for data, session in parsed:
+                filename = account_filename(data["id"]).casefold()
+                if filename in filenames:
+                    raise ValueError("Account filename conflict; no files imported")
+                filenames.add(filename)
+                if data["id"].casefold() in ids or data["name"].casefold() in names:
+                    raise ValueError("Account id or name conflict; no files imported")
+                ids.add(data["id"].casefold())
+                names.add(data["name"].casefold())
+                account = Account.from_storage(data)
+                if account.created_at is None:
+                    account.created_at = utc_now_iso()
+                # Never trust a portable file's session path or share another account's session.
+                account.session_file = f"{uuid.uuid4()}.json" if account.kind == "oauth" else None
+                planned.append((account, session))
+            written = []
+            try:
+                for account, session in planned:
+                    path = self.accounts_dir / account_filename(account.id)
+                    if path.exists():
+                        raise ValueError("Auth file already exists")
+                    written.append(path)
+                    payload = {"version": 1, "account": account.to_storage()}
+                    if session:
+                        payload["oauth_session"] = session
+                    write_private_json(path, payload)
+            except Exception:
+                for path in written:
+                    path.unlink(missing_ok=True)
+                raise
+            accounts = [account for account, _ in planned]
+            self.accounts.extend(accounts)
+            return accounts
+
     def get(self, account_id: str) -> Account | None:
         for account in self.accounts:
             if account.id == account_id:
@@ -318,8 +418,7 @@ class AccountPool:
         return result
 
     def session_store_for(self, account: Account) -> SessionStore:
-        filename = account.session_file or f"{account.id}.json"
-        return self.session_store.for_file(filename)
+        return AccountSessionStore(self.accounts_dir / account_filename(account.id), account, self._lock)
 
     def attach_session(self, account: Account, session: OAuthSession) -> Path:
         if not account.session_file:
@@ -438,6 +537,7 @@ class AccountPool:
             account = self.get(account_id)
             if account is None:
                 raise KeyError(account_id)
+            (self.accounts_dir / account_filename(account_id)).unlink(missing_ok=True)
             self.accounts = [item for item in self.accounts if item.id != account_id]
             self._cooldowns.pop(account_id, None)
             self._cooldown_until_wall.pop(account_id, None)

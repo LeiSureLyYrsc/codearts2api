@@ -7,7 +7,7 @@
 1. **官方客户端同款浏览器 SSO / OAuth**（推荐，不必粘贴长期 AK/SK）
 2. 你自己的华为云 IAM **永久 AK/SK**（以及可选的 STS `X-Security-Token`）
 
-`AK/SK 请写在账号池文件（默认 `data/config.json`）或在 WebUI 里添加，不要放进 `.env`。可以把仓库根目录的 `config.example.json` 复制为 `data/config.json` 后填入密钥。旧的 `CODEARTS_AK` / `CODEARTS_SK` 环境变量仍可作为空池时的一次性导入，但不推荐再使用。
+账号认证与运行配置完全分开：`data/config.json` 只负责应用设置，缺失时由项目自动创建，无需复制模板。每个账号单独保存在 `data/accounts/<id>.json`（包含 AK/SK 或 OAuth 会话）；请在 WebUI「账号池」里添加，或导入 Auth 文件。不要把账号密钥写进 config。
 
 时区、签到 cron、调度开关、账号池策略、上游超时等运行配置同样写在 `data/config.json`，也可在 WebUI 里修改。`.env` 只保留：启动用的 `CA2A_API_KEY`（随后可在 WebUI 更换并持久化）、仅能通过环境变量设置的监听地址 `CA2A_HOST` / `CA2A_PORT`，以及可选的数据目录 `CA2A_DATA_DIR` / `CA2A_AUTH_DIR`。
 
@@ -93,7 +93,7 @@ https://snap-access.cn-north-4.myhuaweicloud.com
    - 既无 `code` 也无 `secret`：视为探活，返回 200。
    - 带 `secret` 与 `redirect`：先 307 到 `redirect`，再轮询 `GET https://snap-access.cn-north-4.myhuaweicloud.com/snap-manager/v1/login/ticket?ticket_id=&secret=`（官方 CLI 最多 10 次、间隔 1 秒）。票据体字段为 `credential.access` / `secret` / `securitytoken` / `expires_at`。
    - 带 `code`：`POST https://sts.cn-north-4.myhuaweicloud.com/v1/oauth2/tokens`，表单为 `client_id`、`code`、`code_verifier`、`grant_type=authorization_code`、`redirect_uri=http://127.0.0.1:<port>/oauth/callback`，请求头带 `DPoP`。响应中的 `credentials`（`access_key_id` / `secret_access_key` / `security_token` / `expiration`）以及 `refresh_token` 为可用的临时凭证。
-6. 之后用同一把 DPoP 私钥和 `grant_type=refresh_token` 调用同一令牌地址续期（可带 `x-agent-user-account`）。临时凭证写入本地 `auths/session.json`（权限 0600），**不要提交到仓库**。过期前约 10 分钟会自动刷新（与官方 CLI 的 600_000 ms 偏差一致）。
+6. 之后用同一把 DPoP 私钥和 `grant_type=refresh_token` 调用同一令牌地址续期（可带 `x-agent-user-account`）。临时凭证及刷新令牌写入该账号的 `data/accounts/<id>.json`（Unix 权限 0600），**不要提交到仓库**。过期前约 10 分钟会自动刷新（与官方 CLI 的 600_000 ms 偏差一致）。
 
 门户回调地址被官方客户端写成环回地址，因此授权必须在能访问本机 `127.0.0.1:<port>` 的浏览器中完成。在远程服务器上登录时，请在自己电脑上做 SSH 本地端口转发，或直接在有浏览器的那台机器上执行 `uv run codearts2api login`。`--print-only` 只是不自动打开浏览器、把授权 URL 打印出来，仍然在本机等待回调。
 
@@ -134,10 +134,8 @@ uv run codearts2api login --account 上班
 # 无桌面环境、只想打印链接：
 uv run codearts2api login --print-only
 
-# 方式 B：在 data/config.json 中填写自己的 IAM AK/SK（以及可选的签到时间等）
-mkdir -p data
-cp config.example.json data/config.json
-# 编辑 accounts 里的 ak / sk，按需修改 settings.checkin_cron 等
+# 方式 B：直接启动网关，在 WebUI「账号池」中添加 AK/SK 或导入 Auth 文件
+# config.json 和 accounts 目录会自动创建，不需要复制配置模板
 ```
 
 启动网关：
@@ -166,7 +164,7 @@ uv run pytest
 
 [`ghcr.io/leisurelyyrsc/codearts2api:latest`](https://github.com/LeiSureLyYrsc/codearts2api/pkgs/container/codearts2api)
 
-`docker-compose.yml` 已指向该 `latest` 标签。先复制 `.env.example` 为 `.env`，**必须**设置 `CA2A_API_KEY`。AK/SK 与定时签到等运行配置请写入挂载的 `data/config.json`（可从 `config.example.json` 复制）；也可以先启动，再在 WebUI 里添加账号或修改签到时间。容器监听 `0.0.0.0:8787`，默认只映射到宿主机的 `127.0.0.1:8787`。控制台在 http://127.0.0.1:8787/ 。
+`docker-compose.yml` 已指向该 `latest` 标签。先复制 `.env.example` 为 `.env`，**必须**设置 `CA2A_API_KEY`。启动时自动创建 `data/config.json`，只保存定时签到等运行配置；AK/SK 或 OAuth 认证保存在 `data/accounts/` 的每账号独立文件中。先启动，再在 WebUI 添加或导入账号即可。容器监听 `0.0.0.0:8787`，默认只映射到宿主机的 `127.0.0.1:8787`。控制台在 http://127.0.0.1:8787/ 。
 
 ```bash
 cp .env.example .env
@@ -175,11 +173,11 @@ docker compose pull
 docker compose up -d
 ```
 
-首次拉取需要仓库里的 Actions 至少成功跑完一次。镜像随公开仓库发布；若 `docker compose pull` 返回 401，到 GitHub Packages 设置里确认 `codearts2api` 包已设为 public。`./data`（WebUI 配置与账号池）和 `./auths`（OAuth 会话）都会挂载到容器中以保持持久化。容器内的 OAuth 回调仍然指向容器自己的 127.0.0.1，通常需要在宿主机做端口转发，或在有浏览器的机器上用 CLI 登录后把 `auths/` 拷进去。
+首次拉取需要仓库里的 Actions 至少成功跑完一次。镜像随公开仓库发布；若 `docker compose pull` 返回 401，到 GitHub Packages 设置里确认 `codearts2api` 包已设为 public。`./data`（运行配置与每账号独立 Auth 文件）会挂载到容器中以保持持久化；`./auths` 挂载仅保留用于旧 OAuth 会话的兼容迁移。容器内的 OAuth 回调仍然指向容器自己的 127.0.0.1，通常需要在宿主机做端口转发，或在有浏览器的机器上用 CLI 登录，然后在 WebUI 导出 Auth 文件并在容器的 WebUI 导入。
 
 ## 配置说明
 
-推荐把账号凭证和运行配置写在 `data/config.json`（可先复制仓库根目录的 `config.example.json`），也可在 WebUI「账号池 / 运行配置」里修改。`.env` 只保留密钥启动默认值和进程级参数。
+首次启动或文件缺失时，项目自动生成包含默认设置的 `data/config.json`。`config.example.json` 只是运行配置参考，不需要复制，也不包含账号凭证。`.env` 只保留网关密钥启动默认值和进程级参数；账号 Auth 文件位于 `data/accounts/`。
 
 ### 环境变量
 
@@ -188,9 +186,9 @@ docker compose up -d
 | `CA2A_API_KEY` 或 `CODEARTS2API_API_KEY` | 保护 `/v1/*` 与 `/admin/*` 的启动默认值；也可在 WebUI 更换并写入 `data/config.json` | 空（未配置则受保护接口返回 503） |
 | `CA2A_HOST` / `CA2A_PORT` | 本地监听（仅环境变量，不能在 WebUI 或配置文件中修改） | `127.0.0.1` / `8787` |
 | `CA2A_DATA_DIR` | 账号池与运行配置目录（`config.json`，权限 0600） | `data` |
-| `CA2A_AUTH_DIR` | OAuth 会话目录 | `auths` |
+| `CA2A_AUTH_DIR` | 旧 OAuth 会话的迁移来源目录（新会话已在每账号 Auth 文件内） | `auths` |
 
-为保持兼容，旧的 `CODEARTS_AK` / `CODEARTS_SK`（以及可选的 `CODEARTS_SECURITY_TOKEN`、`CODEARTS_PROJECT_ID`）在账号池为空时仍会导入为名为 `env` 的账号；若该账号还在，启动时会与当前环境变量同步。新部署请把密钥写进 `data/config.json` 的 `accounts`。其余曾出现在 `.env` 中的运行项（签到 cron、时区、超时等）仍可被环境变量覆盖，但一旦写入 `data/config.json` 或在 WebUI 中保存，以配置文件为准。
+为保持兼容，旧的 `CODEARTS_AK` / `CODEARTS_SK`（以及可选的 `CODEARTS_SECURITY_TOKEN`、`CODEARTS_PROJECT_ID`）在账号池为空时仍会导入为名为 `env` 的账号；若该账号还在，启动时会与当前环境变量同步。新部署请在 WebUI 添加或导入账号，密钥只写入对应 Auth 文件，不写入 config。首次生成 config 时会采用现有环境变量中的运行项（签到 cron、时区、超时等）；之后以 config / WebUI 为准。监听地址与数据目录仍然仅由环境变量控制。
 
 ### `data/config.json`
 
@@ -220,7 +218,7 @@ docker compose up -d
 | `oauth_callback_port` | 本机回调端口，0 表示系统分配 | `0` |
 | `api_key` | 可选，WebUI 保存后的网关密钥；未写入时使用环境变量 | 空 |
 
-`accounts` 数组存放上游凭证。AK/SK 账号使用 `"kind": "aksk"`，字段包括 `ak`、`sk`，以及可选的 `security_token`、`project_id`。OAuth 账号使用 `"kind": "oauth"`，会话文件放在 `CA2A_AUTH_DIR`。
+config 不再包含 `accounts`、AK/SK、`security_token` 或 `project_id`。这些字段只属于下面的每账号 Auth 文件。网关自身的 `settings.api_key` 仍可在 WebUI 保存（它不是上游账号凭证）。
 
 日志为结构化 JSON，不会输出 AK/SK/令牌，并对日志中的密钥值脱敏。在 WebUI 中修改时区、cron 或调度开关时，进程内 APScheduler 会重新安排，无需重启。
 
@@ -228,8 +226,44 @@ docker compose up -d
 
 1. 打开 http://127.0.0.1:8787/ ，输入 `CA2A_API_KEY`。
 2. 在「账号池」中添加第二个账号：AK/SK 直接填写密钥；OAuth 账号保存后再点「OAuth 登录」，在能访问 `127.0.0.1` 的浏览器里打开授权地址。
-3. 「签到与状态」可对全部或单个账号触发每日签到 / 权益领取，并查看调度器的下次运行时间。上次签到结果会写入 `data/config.json`，重启后仍可在页面看到。
-4. 管理接口：`GET/PUT /admin/config`，`GET/POST /admin/accounts`，`PATCH/DELETE /admin/accounts/{id}`，`POST /admin/accounts/{id}/login`，`POST /admin/accounts/{id}/test`（用已有的官方套餐统计路径做探测）。响应中的 SK / security_token / refresh_token / 完整 AK 一律脱敏。
+3. 「签到与状态」可对全部或单个账号触发每日签到 / 权益领取，并查看调度器的下次运行时间。上次签到结果会写入对应的 `data/accounts/<id>.json`，重启后仍可在页面看到。
+4. 管理接口：`GET/PUT /admin/config`，`GET/POST /admin/accounts`，`PATCH/DELETE /admin/accounts/{id}`，`POST /admin/accounts/{id}/login`，`POST /admin/accounts/{id}/test`（用已有的官方套餐统计路径做探测）。普通管理响应中的 SK / security_token / refresh_token / 完整 AK 一律脱敏；显式的 Auth 导出接口是例外，会返回完整凭证。
+
+## Auth 文件：每账号单文件、导入与导出
+
+默认目录：`data/accounts/<id>.json`（随 `CA2A_DATA_DIR` 改变）。账号信息、认证与该账号签到状态在同一文件中；OAuth 的临时 AK/SK、刷新令牌、有效期和 DPoP 私钥也嵌入该文件，不再要求另外携带 session.json。文件原子替换，Unix 权限为 0600；Windows 的 `chmod` 不能替代 NTFS ACL，请把数据目录限制为当前服务账号可访问。
+
+AK/SK Auth 文件的最小结构如下（请勿把真实密钥提交到仓库）：
+
+```json
+{
+  "version": 1,
+  "account": {
+    "id": "primary",
+    "name": "primary",
+    "kind": "aksk",
+    "enabled": true,
+    "ak": "YOUR_ACCESS_KEY_ID",
+    "sk": "YOUR_SECRET_ACCESS_KEY",
+    "security_token": null,
+    "project_id": null
+  }
+}
+```
+
+OAuth 文件使用 `"kind": "oauth"`，同一 JSON 的 `oauth_session` 字段保存完整会话。请使用项目导出的文件，避免手动编辑刷新令牌或 DPoP 数据。账号 ID 使用 1–128 位字母、数字、下划线或连字符；Windows 保留名称会映射为安全文件名。
+
+- **WebUI**：账号行点击「导出 Auth」，确认敏感信息提示后下载单个 JSON；「导入 Auth 文件」支持一次选择多个 JSON。
+- **API**（均需网关 Bearer 密钥）：`GET /admin/accounts/{id}/export` 下载完整 Auth（`Cache-Control: no-store`）；`POST /admin/accounts/import` 接受 `{"files": [<Auth JSON>, ...]}`。
+- 导入最多 100 个文件、请求总量 4 MiB；校验版本、字段类型及必要凭证。ID、文件名或名称冲突（不区分大小写）会拒绝整批导入，不会静默覆盖；请先处理冲突后重试。导入成功响应只返回脱敏账号，不返回密钥。
+- 无需重启即可通过 WebUI/API 导入。若手动把合法 Auth JSON 放到 accounts 目录，需重启读取，文件名须与账号 ID 对应。
+- **导出文件含完整密钥、刷新令牌及私钥，请当作密码保管，勿上传到公开仓库或聊天。** 导出全部账号时可以复制整个 `data/accounts/` 目录；在线逐账号导出亦可。
+
+### 旧部署自动迁移
+
+停止旧进程并私下备份 `data/`、`auths/`，然后启动新版本即可，无需手工复制模板。启动时先把旧 `config.json` 中的 `accounts` 写成独立 Auth 文件，再把 config 改成仅含运行设置的 v2 格式；原 ID、名称、启用状态和签到信息保留。旧 `auths/session.json` 或被账号引用的会话也会嵌入对应 Auth 文件，成功落盘后移除已迁移的旧会话。
+
+损坏文件、未知格式或冲突会明确报错并停止，不会覆盖损坏数据；迁移写入失败时会保留原 config 中的账号以便恢复。数据目录需要写权限。运行期间不要同时启动两个网关进程写同一份数据，也不要边运行边手动编辑 Auth 文件。旧环境变量引导产生的账号同样写到独立 Auth 文件中。
 
 ## 接口与调用示例
 
@@ -265,7 +299,7 @@ curl -s http://127.0.0.1:8787/admin/accounts   -H "Authorization: Bearer $CA2A_A
 ## 限制与注意事项
 
 - 对话、模型列表、签到、OAuth 换票所使用的部分路径**未写入公开 API 目录**。已在官方 CLI 中核对的会在上文标明；未核对的需要你用自己的官方客户端复核。接口可能随官方版本调整。
-- 必须使用**你自己的**华为云账号（浏览器登录或自行创建的 AK/SK）。不要分享密钥或 `auths/session.json`。
+- 必须使用**你自己的**华为云账号（浏览器登录或自行创建的 AK/SK）。不要分享密钥、`data/accounts/` 或导出的 Auth 文件。
 - 对话会消耗账号积分。签到积分仅当天有效，数量以官方活动说明为准。
 - 上游响应字段没有稳定的公开 schema。本网关在字段已接近 OpenAI 形态时做忠实转发，并对明显包装字段做适配，但不会臆造工具调用等行为。
 - 未实现 IDE 本地凭据解密、插队或绕过限流。

@@ -53,6 +53,6 @@ def require_upstream_credentials(settings: Settings) -> None:
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=(
                 "No enabled accounts in the pool. Add an AK/SK account in the WebUI "
-                "or data/config.json, or run `uv run codearts2api login`."
+                "or import an account auth file, or run `uv run codearts2api login`."
             ),
         )

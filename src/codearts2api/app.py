@@ -12,6 +12,7 @@ from typing import Any
 import httpx
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from codearts2api.account_files import account_filename
 from fastapi.staticfiles import StaticFiles
 
 from codearts2api import __version__
@@ -555,6 +556,39 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         refresh_logging(runtime.settings, runtime.pool)
         return runtime.pool.public_account(account)
+
+    @protected.post("/admin/accounts/import")
+    async def import_admin_accounts(request: Request) -> dict[str, Any]:
+        # Bound request size before parsing to avoid unbounded in-memory uploads.
+        raw = bytearray()
+        async for chunk in request.stream():
+            raw.extend(chunk)
+            if len(raw) > 4 * 1024 * 1024:
+                raise HTTPException(status_code=413, detail="Auth import exceeds 4 MiB")
+        try:
+            payload = json.loads(raw)
+            files = payload.get("files") if isinstance(payload, dict) else None
+            if not isinstance(files, list):
+                raise ValueError("Expected {files: [auth-file, ...]}")
+            runtime = _state(request)
+            accounts = runtime.pool.import_accounts(files)
+        except (ValueError, UnicodeError) as exc:
+            # Parser/validation errors must never echo uploaded credentials.
+            detail = "Invalid auth JSON" if isinstance(exc, (json.JSONDecodeError, UnicodeError)) else str(exc)
+            raise HTTPException(status_code=400, detail=detail) from None
+        refresh_logging(runtime.settings, runtime.pool)
+        return {"accounts": [runtime.pool.public_account(a) for a in accounts]}
+
+    @protected.get("/admin/accounts/{account_id}/export")
+    async def export_admin_account(account_id: str, request: Request) -> JSONResponse:
+        try:
+            payload = _state(request).pool.export_account(account_id)
+        except KeyError:
+            raise HTTPException(status_code=404, detail="Account not found") from None
+        return JSONResponse(payload, headers={
+            "Content-Disposition": f'attachment; filename="{account_filename(account_id)}"',
+            "Cache-Control": "no-store", "Pragma": "no-cache",
+        })
 
     @protected.patch("/admin/accounts/{account_id}")
     async def patch_admin_account(

@@ -1,6 +1,7 @@
 """Runtime settings.
 
-Non-secret options belong in data/config.json (see config.example.json) or the WebUI.
+Runtime options belong in auto-created data/config.json or the WebUI.
+Account credentials live in separate data/accounts/*.json auth files.
 Environment variables remain valid overrides for local/dev and for process-only
 values (host, port, data_dir, auth_dir). Secrets such as CA2A_API_KEY may come from
 the environment or be persisted in the config file after a WebUI save.

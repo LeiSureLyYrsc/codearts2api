@@ -126,12 +126,12 @@ class CredentialResolver:
             if env is not None:
                 return env
             raise RuntimeError(
-                "No usable AK/SK account in the pool. Add one in the WebUI or data/config.json."
+                "No usable AK/SK account in the pool. Add one in the WebUI or import an account auth file."
             )
         if source == "oauth":
             raise RuntimeError("No usable OAuth account in the pool; run: uv run codearts2api login")
         raise RuntimeError(
-            "No credentials available. Add an AK/SK account in the WebUI or data/config.json, "
+            "No credentials available. Add an AK/SK account in the WebUI or import an account auth file, "
             "or run `uv run codearts2api login`."
         )
 

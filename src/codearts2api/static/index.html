@@ -50,6 +50,8 @@
               <p class="muted">对话按策略轮换 / 故障转移；每日签到会对每个已启用账号分别执行。</p>
             </div>
             <div class="actions">
+              <button type="button" class="btn" id="btn-import-auth">导入 Auth 文件</button>
+              <input type="file" id="auth-files" accept=".json,application/json" multiple hidden>
               <button type="button" class="btn" id="btn-add-aksk">添加 AK/SK 账号</button>
               <button type="button" class="btn primary" id="btn-add-oauth">添加 OAuth 账号</button>
             </div>
@@ -101,7 +103,7 @@
             <div class="section-head">
               <div>
                 <h2>运行配置</h2>
-                <p class="muted">保存后写入 <code>data/config.json</code> 并尽量立即生效。也可先复制仓库中的 <code>config.example.json</code>。监听地址仍只能通过环境变量设置。</p>
+                <p class="muted">保存后写入 <code>data/config.json</code> 并尽量立即生效。配置文件缺失时会自动创建，无需复制模板。监听地址仍只能通过环境变量设置。</p>
               </div>
               <button type="submit" class="btn primary">保存配置</button>
             </div>

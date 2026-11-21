@@ -150,6 +150,7 @@
         <td>${statusPill(last.status)}<div class="muted">${escapeHtml(formatTime(account.last_checkin_at))}</div></td>
         <td>${cool || '<span class="pill ok">就绪</span>'}${err}</td>
         <td class="row-actions">
+          <button type="button" class="btn small" data-act="export">导出 Auth</button>
           <button type="button" class="btn small" data-act="edit">编辑</button>
           <button type="button" class="btn small" data-act="test">探测</button>
           ${account.kind === "oauth" ? '<button type="button" class="btn small" data-act="login">OAuth 登录</button>' : ""}
@@ -183,6 +184,17 @@
 
   async function handleAccountAction(act, account) {
     try {
+      if (act === "export") {
+        if (!confirm("导出文件包含完整密钥及 OAuth 会话，请仅保存在可信设备。是否继续？")) return;
+        const payload = await api(`/admin/accounts/${encodeURIComponent(account.id)}/export`);
+        const url = URL.createObjectURL(new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" }));
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = `account-${account.id.replace(/[^A-Za-z0-9_-]/g, "_")}.json`;
+        link.click();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+        return;
+      }
       if (act === "edit") {
         openAccountDialog(account);
         return;
@@ -212,6 +224,22 @@
       toast(err.message);
     }
   }
+
+  $("btn-import-auth").addEventListener("click", () => $("auth-files").click());
+  $("auth-files").addEventListener("change", async (event) => {
+    try {
+      const selected = Array.from(event.target.files);
+      if (!selected.length) return;
+      if (selected.length > 100 || selected.reduce((n, f) => n + f.size, 0) > 4 * 1024 * 1024) {
+        throw new Error("最多导入 100 个文件，总计不超过 4 MiB");
+      }
+      const files = await Promise.all(selected.map(async (file) => JSON.parse(await file.text())));
+      await api("/admin/accounts/import", { method: "POST", body: JSON.stringify({ files }) });
+      toast("Auth 文件已导入");
+      await loadAll();
+    } catch (err) { toast(err.message); }
+    finally { event.target.value = ""; }
+  });
 
   function openAccountDialog(account, kind) {
     const form = $("account-form");

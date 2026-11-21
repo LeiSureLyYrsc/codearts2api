@@ -119,9 +119,10 @@ def cmd_logout(args: argparse.Namespace) -> int:
         store.clear()
         print(f"Removed OAuth session for account {account.name} ({account.id}) at {store.path}")
         return 0
-    store = SessionStore(settings.auth_dir)
-    store.clear()
-    print(f"Removed OAuth session under {store.directory}")
+    for account in pool.accounts:
+        if account.kind == "oauth":
+            pool.session_store_for(account).clear()
+    print("Removed OAuth sessions from account auth files")
     return 0
 
 
